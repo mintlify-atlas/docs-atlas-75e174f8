@@ -1,0 +1,330 @@
+---
+title: Binance Proxy
+description: Proxy endpoint for Binance API with order limits and volume caps
+---
+
+## ANY /binance/*
+
+Proxy requests to Binance API with automatic HMAC-SHA256 signing, per-order limits, daily volume caps, and endpoint restrictions. Designed for safe AI agent trading.
+
+### Authentication
+
+Does **not** require session authentication. Uses Binance API key and secret from the credential vault.
+
+<Warning>
+  The proxy does not use session tokens. Configure your Binance API key and secret in the Fishnet credential vault. The proxy will automatically sign requests with HMAC-SHA256.
+</Warning>
+
+### Endpoint Format
+
+```
+GET /binance/api/v3/ticker/price?symbol=BTCUSDT
+GET /binance/api/v3/klines?symbol=BTCUSDT&interval=1m
+POST /binance/api/v3/order
+DELETE /binance/api/v3/openOrders?symbol=BTCUSDT
+# Must start with /api or /sapi
+```
+
+The path after `/binance` is forwarded to the Binance API (default: `https://api.binance.com`).
+
+### Allowed Endpoints
+
+<ResponseField name="Read-only (no credentials)" type="array">
+  - `GET /api/v3/ticker/*` - Price tickers
+  - `GET /api/v3/klines` - Candlestick data
+</ResponseField>
+
+<ResponseField name="Trading (signed)" type="array">
+  - `POST /api/v3/order` - Place order (subject to limits)
+  - `DELETE /api/v3/openOrders` - Cancel all open orders (requires `allow_delete_open_orders`)
+</ResponseField>
+
+<ResponseField name="Hard-blocked (always denied)" type="array">
+  - `POST /sapi/v1/capital/withdraw/*` - Withdrawals are permanently blocked
+</ResponseField>
+
+<Warning>
+  All other endpoints are denied by default for security. Only market data and order placement are allowed.
+</Warning>
+
+### Order Limits
+
+Fishnet enforces strict limits on order placement:
+
+<ParamField path="binance.max_order_value_usd" type="number" default="0">
+  Maximum USD value per order. 0 = no limit. Enforced before sending to Binance.
+</ParamField>
+
+<ParamField path="binance.daily_volume_cap_usd" type="number" default="0">
+  Maximum total USD volume per day (UTC). 0 = no limit. Uses global lock to prevent race conditions.
+</ParamField>
+
+<ParamField path="binance.allow_delete_open_orders" type="boolean" default="false">
+  Allow `DELETE /api/v3/openOrders` (cancel all orders). Disabled by default for safety.
+</ParamField>
+
+### Supported Trading Pairs
+
+Only USD-quoted pairs are supported for value calculation:
+- `*USDT` (Tether)
+- `*USDC` (USD Coin)
+- `*BUSD` (Binance USD)
+- `*FDUSD` (First Digital USD)
+
+Orders for non-USD pairs (e.g., `BTCETH`) will be rejected.
+
+### Request Signing
+
+For non-read-only endpoints, Fishnet automatically:
+1. Adds `timestamp` parameter (current Unix timestamp in milliseconds)
+2. Adds `recvWindow` parameter (configured via `binance.recv_window_ms`)
+3. Computes HMAC-SHA256 signature using your API secret
+4. Appends `signature` parameter to query string
+5. Adds `X-MBX-APIKEY` header with your API key
+
+<Info>
+  You do not need to sign requests yourself. Fishnet handles all signing automatically.
+</Info>
+
+### Order Value Calculation
+
+For `POST /api/v3/order` requests, Fishnet calculates USD value:
+
+1. **Quote order quantity** (preferred):
+   ```
+   symbol=BTCUSDT&quoteOrderQty=100
+   # Value = $100.00
+   ```
+
+2. **Price × quantity** (for limit orders):
+   ```
+   symbol=ETHUSDC&price=2000&quantity=0.1
+   # Value = 2000 × 0.1 = $200.00
+   ```
+
+3. **Market orders without price**:
+   ```
+   symbol=BTCUSDT&quantity=0.01
+   # ERROR: missing price - use quoteOrderQty for market orders
+   ```
+
+<Warning>
+  Order values are rounded up to the nearest micro-dollar ($0.000001) for safety. This ensures agents cannot bypass limits with many tiny orders.
+</Warning>
+
+### Examples
+
+<CodeGroup>
+
+```bash curl (Market Data)
+curl -X GET "http://localhost:3080/binance/api/v3/ticker/price?symbol=BTCUSDT"
+```
+
+```bash curl (Place Order)
+curl -X POST "http://localhost:3080/binance/api/v3/order" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "symbol=BTCUSDT&side=BUY&type=MARKET&quoteOrderQty=50"
+```
+
+```python Python (Trading Bot)
+import requests
+
+# Get current BTC price
+response = requests.get(
+    "http://localhost:3080/binance/api/v3/ticker/price",
+    params={"symbol": "BTCUSDT"}
+)
+price_data = response.json()
+print(f"BTC price: ${price_data['price']}")
+
+# Place a $50 market buy order
+response = requests.post(
+    "http://localhost:3080/binance/api/v3/order",
+    data={
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "quoteOrderQty": "50"  # $50 USD
+    }
+)
+
+if response.status_code == 200:
+    order = response.json()
+    print(f"Order placed: {order['orderId']}")
+elif response.status_code == 403:
+    error = response.json()
+    print(f"Order rejected: {error['error']}")
+    # Example: "order value $50.00 exceeds max_order_value_usd $25.00"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  "http://localhost:3080/binance/api/v3/ticker/price?symbol=BTCUSDT"
+);
+const data = await response.json();
+console.log(`BTC price: $${data.price}`);
+
+// Place order
+const orderResponse = await fetch(
+  "http://localhost:3080/binance/api/v3/order",
+  {
+    method: "POST",
+    headers: {"Content-Type": "application/x-www-form-urlencoded"},
+    body: new URLSearchParams({
+      symbol: "BTCUSDT",
+      side: "BUY",
+      type: "MARKET",
+      quoteOrderQty: "50"
+    })
+  }
+);
+
+const order = await orderResponse.json();
+if (orderResponse.ok) {
+  console.log(`Order placed: ${order.orderId}`);
+} else {
+  console.error(`Order rejected: ${order.error}`);
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "binance path must start with /api or /sapi"}
+  ```
+  Invalid path format.
+</ResponseField>
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "missing symbol in binance order request"}
+  ```
+  Required parameter missing from order.
+</ResponseField>
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "unsupported symbol for USD valuation: BTCETH. use a USD-quoted pair (USDT/USDC/BUSD/FDUSD)"}
+  ```
+  Trading pair is not USD-quoted.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "binance proxy is disabled"}
+  ```
+  Set `binance.enabled = true` in configuration.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "endpoint is hard-blocked by fishnet policy: withdrawals are disabled"}
+  ```
+  Withdrawal endpoints are permanently blocked.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "endpoint blocked by default policy: DELETE /api/v3/openOrders"}
+  ```
+  Set `binance.allow_delete_open_orders = true` to enable.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "order value $150.00 exceeds max_order_value_usd $100.00"}
+  ```
+  Order exceeds per-order limit.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "daily binance volume cap exceeded: $950.00 + $75.00 > $1000.00"}
+  ```
+  Order would exceed daily volume cap.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "binance endpoint is not allowed by policy"}
+  ```
+  Endpoint is not in the allowed list.
+</ResponseField>
+
+<ResponseField name="502 Bad Gateway" type="object">
+  ```json
+  {"error": "upstream provider is unavailable"}
+  ```
+  Failed to connect to Binance API.
+</ResponseField>
+
+### Audit Log Entry
+
+Each proxied request creates an audit log entry with cost tracking:
+
+```json
+{
+  "id": 44,
+  "timestamp": 1709510410000,
+  "intent_type": "api_call",
+  "service": "binance",
+  "action": "POST /api/v3/order",
+  "decision": "approved",
+  "reason": null,
+  "cost_usd": 50.00,
+  "policy_version_hash": "b2c3d4...",
+  "intent_hash": "345678...",
+  "permit_hash": null,
+  "merkle_root": "dcba98..."
+}
+```
+
+Retrieve via `GET /api/audit?service=binance`.
+
+### Configuration
+
+Add your Binance API credentials to the vault:
+
+```bash
+# Via Dashboard: Credentials > Add Credential
+# Service: binance, Name: api_key, Key: (your API key)
+# Service: binance, Name: api_secret, Key: (your API secret)
+```
+
+Or via API:
+
+```bash
+curl -X POST http://localhost:3080/api/credentials \
+  -H "Authorization: Bearer fn_sess_YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"service": "binance", "name": "api_key", "key": "YOUR_API_KEY"}'
+
+curl -X POST http://localhost:3080/api/credentials \
+  -H "Authorization: Bearer fn_sess_YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"service": "binance", "name": "api_secret", "key": "YOUR_API_SECRET"}'
+```
+
+Configure limits in `fishnet.toml`:
+
+```toml
+[binance]
+enabled = true
+max_order_value_usd = 100.0
+daily_volume_cap_usd = 1000.0
+allow_delete_open_orders = false
+recv_window_ms = 5000
+```
+
+### Safety Features
+
+1. **Global order lock**: Prevents race conditions when checking daily volume cap
+2. **Rounding up**: Order values rounded up to prevent micro-order bypasses
+3. **Hard-blocked withdrawals**: Withdrawal endpoints permanently disabled
+4. **USD-only validation**: Only USD-quoted pairs accepted
+5. **Endpoint allowlist**: Only specific safe endpoints are permitted
+6. **Credential override**: Client cannot provide their own API keys
+7. **Audit trail**: Every request logged with cryptographic integrity

@@ -1,0 +1,92 @@
+---
+title: fishnet start
+description: Start the Fishnet security proxy server
+---
+
+## Synopsis
+
+```bash
+fishnet start [--config PATH]
+```
+
+Starts the Fishnet local security gateway server. The server runs as a proxy between AI agents and external API services, enforcing security policies, rate limits, and spend tracking.
+
+## Arguments
+
+<ParamField path="--config" type="string" optional>
+  Path to the configuration file (fishnet.toml). If not specified, Fishnet looks for the config in the default location.
+</ParamField>
+
+## Examples
+
+### Start with default configuration
+
+```bash
+fishnet start
+```
+
+**Output:**
+```
+[fishnet] config loaded from ~/.config/fishnet/fishnet.toml
+[fishnet] listening on http://127.0.0.1:3777
+```
+
+### Start with custom configuration
+
+```bash
+fishnet start --config /path/to/custom/fishnet.toml
+```
+
+**Output:**
+```
+[fishnet] config loaded from /path/to/custom/fishnet.toml
+[fishnet] listening on http://127.0.0.1:3777
+```
+
+## Behavior
+
+- Creates a PID file to track the running process
+- Loads configuration from the specified path or default location
+- Opens the encrypted credential vault (requires master password)
+- Initializes spend tracking, audit logging, and alert stores
+- Starts HTTP server on configured host:port (default: 127.0.0.1:3777)
+- Watches configuration file for changes and reloads automatically
+- Responds to SIGTERM and SIGINT for graceful shutdown
+
+## Error messages
+
+**Already running:**
+```
+already running (pid: 12345). use `fishnet stop` first
+```
+Another Fishnet instance is already running. Stop it before starting a new one.
+
+**Failed to unlock vault:**
+```
+FISHNET_MASTER_PASSWORD is not set and no usable keychain vault key was found
+```
+The master password environment variable is not set and no keychain entry exists. Set the password or run `fishnet init` first.
+
+**Failed to bind port:**
+```
+failed to bind 127.0.0.1:3777: Address already in use
+```
+The configured port is already in use by another process.
+
+## Exit codes
+
+- **0** - Server started successfully (or stopped gracefully via signal)
+- **1** - Error occurred (already running, failed to bind, vault unlock failed, etc.)
+
+## Environment variables
+
+- `FISHNET_HOST` - Override the server bind host (default: 127.0.0.1)
+- `FISHNET_PORT` - Override the server bind port (default: 3777)
+- `FISHNET_MASTER_PASSWORD` - Master password for vault decryption
+- `FISHNET_STORE_DERIVED_KEY_IN_KEYCHAIN` - Store derived key in system keychain (macOS only)
+
+## Related commands
+
+- [fishnet stop](/cli/fishnet-stop) - Stop the running server
+- [fishnet status](/cli/fishnet-status) - Check server status
+- [fishnet init](/cli/fishnet-init) - Initialize Fishnet for first use

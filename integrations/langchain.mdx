@@ -1,0 +1,402 @@
+---
+title: "LangChain Integration"
+description: "Use Fishnet as a security proxy for LangChain agents"
+icon: "link"
+---
+
+Integrate LangChain with Fishnet to add credential isolation, spend tracking, and security guardrails to your AI applications.
+
+## How It Works
+
+Fishnet acts as a transparent proxy between LangChain and AI providers:
+
+1. Configure LangChain's OpenAI/Anthropic clients to use Fishnet's proxy URL
+2. LangChain sends all requests to `localhost:8473`
+3. Fishnet applies security policies (spend caps, prompt drift detection, etc.)
+4. Fishnet injects credentials from its encrypted vault
+5. Requests are forwarded to the real provider
+6. All actions are logged in Fishnet's audit trail
+
+Your agent code never handles real API keys. Every LLM call flows through Fishnet's guardrails.
+
+## Prerequisites
+
+- Fishnet running locally (see [Installation](/installation))
+- LangChain installed: `pip install langchain langchain-openai langchain-anthropic`
+- API keys stored in Fishnet's vault
+
+## Setup
+
+<Steps>
+  <Step title="Add credentials to Fishnet">
+    Store your API keys in Fishnet's encrypted vault:
+
+    ```bash
+    fishnet add-key openai sk-...
+    fishnet add-key anthropic sk-ant-...
+    ```
+
+    <Note>
+      Fishnet encrypts these keys. Your LangChain code will never see them.
+    </Note>
+  </Step>
+
+  <Step title="Configure LangChain with Fishnet proxy">
+    Update your LangChain code to use Fishnet's proxy endpoints:
+
+    <CodeGroup>
+    ```python OpenAI (ChatOpenAI)
+    from langchain_openai import ChatOpenAI
+
+    # Configure ChatOpenAI to use Fishnet proxy
+    llm = ChatOpenAI(
+        model="gpt-4",
+        base_url="http://localhost:8473/proxy/openai/v1",
+        api_key="placeholder"  # Fishnet ignores this
+    )
+
+    # Use normally
+    response = llm.invoke("What is the capital of France?")
+    print(response.content)
+    ```
+
+    ```python Anthropic (ChatAnthropic)
+    from langchain_anthropic import ChatAnthropic
+
+    # Configure ChatAnthropic to use Fishnet proxy
+    llm = ChatAnthropic(
+        model="claude-3-5-sonnet-20241022",
+        base_url="http://localhost:8473/proxy/anthropic",
+        api_key="placeholder"  # Fishnet ignores this
+    )
+
+    # Use normally
+    response = llm.invoke("Explain quantum computing in simple terms")
+    print(response.content)
+    ```
+
+    ```python Environment Variables
+    import os
+    from langchain_openai import ChatOpenAI
+
+    # Set via environment
+    os.environ["OPENAI_BASE_URL"] = "http://localhost:8473/proxy/openai/v1"
+    os.environ["OPENAI_API_KEY"] = "placeholder"
+
+    # LangChain reads from environment
+    llm = ChatOpenAI(model="gpt-4")
+    response = llm.invoke("Hello!")
+    ```
+
+    ```python Chains and Agents
+    from langchain.chains import LLMChain
+    from langchain.prompts import PromptTemplate
+    from langchain_openai import ChatOpenAI
+
+    # Fishnet-protected LLM
+    llm = ChatOpenAI(
+        model="gpt-4-turbo",
+        base_url="http://localhost:8473/proxy/openai/v1",
+        api_key="placeholder"
+    )
+
+    # Use in chains
+    prompt = PromptTemplate.from_template(
+        "Translate {text} to {language}"
+    )
+    chain = LLMChain(llm=llm, prompt=prompt)
+
+    result = chain.run(text="Hello, world!", language="French")
+    print(result)
+    ```
+    </CodeGroup>
+
+    <Warning>
+      The `api_key` parameter must be set (any value works), but Fishnet replaces it with vault credentials.
+    </Warning>
+  </Step>
+
+  <Step title="Run your LangChain application">
+    Execute your code normally. All LLM requests now flow through Fishnet:
+
+    ```bash
+    python your_app.py
+    ```
+  </Step>
+
+  <Step title="Monitor requests in Fishnet">
+    View requests in real-time:
+
+    ```bash
+    # Tail audit log
+    fishnet audit --tail
+
+    # Or open the dashboard
+    open http://localhost:8473
+    ```
+
+    You'll see each LangChain request logged with token usage and cost.
+  </Step>
+</Steps>
+
+## Advanced Usage
+
+### Streaming Responses
+
+Fishnet supports streaming for both OpenAI and Anthropic:
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="gpt-4",
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder",
+    streaming=True
+)
+
+for chunk in llm.stream("Write a short poem about the ocean"):
+    print(chunk.content, end="", flush=True)
+```
+
+Fishnet tracks token usage and cost even for streamed responses.
+
+### Multi-Agent Systems
+
+When using multiple LangChain agents, all inherit Fishnet's protection:
+
+```python
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain_openai import ChatOpenAI
+from langchain import hub
+
+# All agents route through Fishnet
+llm = ChatOpenAI(
+    model="gpt-4",
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder"
+)
+
+prompt = hub.pull("hwchase17/react")
+agent = create_react_agent(llm, tools, prompt)
+agent_executor = AgentExecutor(agent=agent, tools=tools)
+
+# Every LLM call is logged and rate-limited
+result = agent_executor.invoke({"input": "What's the weather in Paris?")
+```
+
+### RAG Pipelines
+
+Fishnet works seamlessly with retrieval-augmented generation:
+
+```python
+from langchain.chains import RetrievalQA
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+
+# Protected LLM
+llm = ChatOpenAI(
+    model="gpt-4",
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder"
+)
+
+# Protected embeddings
+embeddings = OpenAIEmbeddings(
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder"
+)
+
+vectorstore = FAISS.from_texts(texts, embeddings)
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=vectorstore.as_retriever()
+)
+
+result = qa_chain.run("What does the document say about security?")
+```
+
+## Security Policies
+
+### Model Allowlisting
+
+Restrict which models your LangChain app can use:
+
+```toml
+[llm]
+allowed_models = ["gpt-4", "gpt-4-turbo"]
+```
+
+If your code requests `gpt-3.5-turbo`, Fishnet blocks it.
+
+### Spend Tracking
+
+Fishnet tracks every LangChain request's token usage and cost:
+
+```toml
+[llm]
+track_spend = true
+daily_budget_usd = 200.0
+budget_warning_pct = 75
+```
+
+View spend in the dashboard or via API:
+
+```bash
+curl http://localhost:8473/api/v1/spend
+```
+
+### Rate Limiting
+
+Prevent your LangChain agents from flooding providers:
+
+```toml
+[llm]
+rate_limit_per_minute = 100
+```
+
+Fishnet enforces this globally across all LangChain instances.
+
+### Prompt Safety
+
+Detect when system prompts deviate from expected baselines:
+
+```toml
+[llm.prompt_drift]
+enabled = true
+max_deviation_pct = 15.0
+```
+
+If a LangChain chain generates an unexpected prompt, Fishnet blocks it and alerts you.
+
+## Example: Full LangChain Agent with Fishnet
+
+```python
+import os
+from langchain.agents import AgentExecutor, create_openai_functions_agent
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.tools import tool
+
+# Configure Fishnet proxy
+llm = ChatOpenAI(
+    model="gpt-4-turbo",
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder",
+    temperature=0
+)
+
+@tool
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"Weather in {city}: Sunny, 72°F"
+
+tools = [get_weather]
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant."),
+    ("human", "{input}"),
+    MessagesPlaceholder(variable_name="agent_scratchpad"),
+])
+
+agent = create_openai_functions_agent(llm, tools, prompt)
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+# All LLM calls are protected by Fishnet
+result = agent_executor.invoke({
+    "input": "What's the weather in San Francisco?"
+})
+
+print(result["output"])
+```
+
+Fishnet automatically:
+- Injects credentials
+- Tracks token usage and cost
+- Enforces rate limits
+- Logs all actions
+- Applies prompt drift detection
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection refused" icon="plug">
+    Ensure Fishnet is running:
+
+    ```bash
+    fishnet status
+    ```
+
+    Start if needed:
+
+    ```bash
+    fishnet start
+    ```
+  </Accordion>
+
+  <Accordion title="Authentication errors" icon="key">
+    Verify credentials are stored:
+
+    ```bash
+    fishnet list-keys
+    ```
+
+    Add missing keys:
+
+    ```bash
+    fishnet add-key <provider> <key>
+    ```
+  </Accordion>
+
+  <Accordion title="Model not allowed" icon="ban">
+    Check your allowlist in `fishnet.toml`:
+
+    ```toml
+    [llm]
+    allowed_models = ["gpt-4", "gpt-4-turbo"]
+    ```
+
+    Either add the model or update your LangChain code to use an allowed model.
+  </Accordion>
+
+  <Accordion title="Budget exceeded" icon="wallet">
+    Your daily spend cap was hit. View spend:
+
+    ```bash
+    fishnet audit --today
+    ```
+
+    Increase the budget in `fishnet.toml`:
+
+    ```toml
+    [llm]
+    daily_budget_usd = 500.0
+    ```
+
+    Restart Fishnet to apply changes:
+
+    ```bash
+    fishnet restart
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Credential Vault" icon="vault" href="/concepts/credential-vault">
+    Learn how Fishnet stores and injects API keys
+  </Card>
+
+  <Card title="Spend Limits" icon="chart-line" href="/concepts/spend-limits">
+    Configure budgets and track costs
+  </Card>
+
+  <Card title="Prompt Drift Detection" icon="wave-pulse" href="/security/prompt-drift-detection">
+    Protect against prompt injection attacks
+  </Card>
+
+  <Card title="Audit Trail" icon="scroll" href="/concepts/audit-trail">
+    Review and export all LangChain requests
+  </Card>
+</CardGroup>

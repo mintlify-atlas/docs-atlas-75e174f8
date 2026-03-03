@@ -1,0 +1,582 @@
+---
+title: "CrewAI Integration"
+description: "Route CrewAI agents through Fishnet for credential isolation and spend control"
+icon: "users"
+---
+
+Integrate CrewAI with Fishnet to add enterprise-grade security to your multi-agent systems.
+
+## How It Works
+
+Fishnet sits between CrewAI and AI providers, intercepting every LLM request:
+
+1. Configure CrewAI agents to use Fishnet's proxy URLs
+2. CrewAI sends requests to `localhost:8473` instead of OpenAI/Anthropic directly
+3. Fishnet enforces policies: spend caps, rate limits, prompt drift detection
+4. Fishnet injects real credentials from its encrypted vault
+5. Requests are forwarded to upstream providers
+6. All actions are logged in Fishnet's tamper-proof audit trail
+
+Your agents never see real API keys. Every crew, task, and tool call flows through Fishnet's guardrails.
+
+## Prerequisites
+
+- Fishnet running on `localhost:8473` (see [Installation](/installation))
+- CrewAI installed: `pip install crewai crewai-tools`
+- API keys stored in Fishnet's credential vault
+
+## Setup
+
+<Steps>
+  <Step title="Store credentials in Fishnet">
+    Add your API keys to Fishnet's encrypted vault:
+
+    ```bash
+    fishnet add-key openai sk-...
+    fishnet add-key anthropic sk-ant-...
+    ```
+
+    <Note>
+      These keys are encrypted at rest. CrewAI will never see them.
+    </Note>
+  </Step>
+
+  <Step title="Configure CrewAI to use Fishnet proxy">
+    Set environment variables to point CrewAI at Fishnet:
+
+    <CodeGroup>
+    ```python Environment Variables
+    import os
+    from crewai import Agent, Task, Crew
+    from langchain_openai import ChatOpenAI
+
+    # Configure Fishnet proxy
+    os.environ["OPENAI_BASE_URL"] = "http://localhost:8473/proxy/openai/v1"
+    os.environ["OPENAI_API_KEY"] = "placeholder"
+
+    # CrewAI reads from environment
+    agent = Agent(
+        role="Research Analyst",
+        goal="Find and summarize information",
+        backstory="You are an expert researcher."
+    )
+
+    task = Task(
+        description="Research the latest AI trends",
+        agent=agent
+    )
+
+    crew = Crew(agents=[agent], tasks=[task])
+    result = crew.kickoff()
+    ```
+
+    ```python Custom LLM
+    from crewai import Agent, Task, Crew
+    from langchain_openai import ChatOpenAI
+
+    # Configure LLM with Fishnet proxy
+    llm = ChatOpenAI(
+        model="gpt-4",
+        base_url="http://localhost:8473/proxy/openai/v1",
+        api_key="placeholder"
+    )
+
+    agent = Agent(
+        role="Data Analyst",
+        goal="Analyze datasets and provide insights",
+        backstory="You are a data science expert.",
+        llm=llm  # Use Fishnet-protected LLM
+    )
+
+    task = Task(
+        description="Analyze sales data from Q4",
+        agent=agent
+    )
+
+    crew = Crew(agents=[agent], tasks=[task])
+    result = crew.kickoff()
+    ```
+
+    ```python Anthropic
+    from crewai import Agent, Task, Crew
+    from langchain_anthropic import ChatAnthropic
+
+    # Use Anthropic via Fishnet
+    llm = ChatAnthropic(
+        model="claude-3-5-sonnet-20241022",
+        base_url="http://localhost:8473/proxy/anthropic",
+        api_key="placeholder"
+    )
+
+    agent = Agent(
+        role="Content Writer",
+        goal="Write engaging blog posts",
+        backstory="You are a professional content creator.",
+        llm=llm
+    )
+
+    task = Task(
+        description="Write a blog post about AI safety",
+        agent=agent
+    )
+
+    crew = Crew(agents=[agent], tasks=[task])
+    result = crew.kickoff()
+    ```
+
+    ```bash .env File
+    # .env
+    OPENAI_BASE_URL=http://localhost:8473/proxy/openai/v1
+    OPENAI_API_KEY=placeholder
+
+    # Optional: Anthropic
+    ANTHROPIC_BASE_URL=http://localhost:8473/proxy/anthropic
+    ANTHROPIC_API_KEY=placeholder
+    ```
+    </CodeGroup>
+
+    <Warning>
+      The API key must be set (any placeholder works), but Fishnet ignores it and uses vault credentials.
+    </Warning>
+  </Step>
+
+  <Step title="Run your CrewAI workflow">
+    Execute your crew normally. All LLM requests are now protected:
+
+    ```bash
+    python your_crew.py
+    ```
+  </Step>
+
+  <Step title="Monitor agent activity">
+    View requests in Fishnet's dashboard:
+
+    ```bash
+    # Tail audit log
+    fishnet audit --tail
+
+    # Open dashboard
+    open http://localhost:8473
+    ```
+
+    You'll see every agent's LLM calls, token usage, and cost.
+  </Step>
+</Steps>
+
+## Multi-Agent Example
+
+Here's a complete CrewAI workflow protected by Fishnet:
+
+```python
+import os
+from crewai import Agent, Task, Crew, Process
+from langchain_openai import ChatOpenAI
+
+# Configure Fishnet proxy
+os.environ["OPENAI_BASE_URL"] = "http://localhost:8473/proxy/openai/v1"
+os.environ["OPENAI_API_KEY"] = "placeholder"
+
+# Custom LLM configuration (optional - uses environment if not specified)
+llm = ChatOpenAI(
+    model="gpt-4-turbo",
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder",
+    temperature=0.7
+)
+
+# Define agents
+researcher = Agent(
+    role="Market Researcher",
+    goal="Research and analyze market trends",
+    backstory="You are an expert market analyst with 10 years of experience.",
+    llm=llm,
+    verbose=True
+)
+
+writer = Agent(
+    role="Content Writer",
+    goal="Write compelling marketing content",
+    backstory="You are a creative copywriter who crafts engaging narratives.",
+    llm=llm,
+    verbose=True
+)
+
+reviewer = Agent(
+    role="Content Reviewer",
+    goal="Review and improve content quality",
+    backstory="You are a senior editor with a keen eye for detail.",
+    llm=llm,
+    verbose=True
+)
+
+# Define tasks
+research_task = Task(
+    description="Research the latest trends in AI-powered productivity tools",
+    agent=researcher,
+    expected_output="A comprehensive report on AI productivity trends"
+)
+
+writing_task = Task(
+    description="Write a blog post based on the research findings",
+    agent=writer,
+    expected_output="A 1000-word blog post about AI productivity trends"
+)
+
+review_task = Task(
+    description="Review and refine the blog post for publication",
+    agent=reviewer,
+    expected_output="A polished, publication-ready blog post"
+)
+
+# Create crew
+crew = Crew(
+    agents=[researcher, writer, reviewer],
+    tasks=[research_task, writing_task, review_task],
+    process=Process.sequential,
+    verbose=True
+)
+
+# Execute crew (all LLM calls protected by Fishnet)
+result = crew.kickoff()
+print(result)
+```
+
+Fishnet automatically:
+- Tracks each agent's token usage and cost
+- Enforces rate limits across the entire crew
+- Logs every task execution
+- Applies prompt drift detection
+- Blocks requests if budget is exceeded
+
+## Security Features
+
+### Spend Limits Per Crew
+
+Set daily budgets in `fishnet.toml`:
+
+```toml
+[llm]
+track_spend = true
+daily_budget_usd = 100.0
+budget_warning_pct = 80
+```
+
+When your crew hits the budget, Fishnet blocks further requests. No $500 surprises from a runaway multi-agent loop.
+
+### Rate Limiting
+
+Prevent crews from flooding providers:
+
+```toml
+[llm]
+rate_limit_per_minute = 120
+```
+
+Fishnet enforces this globally. If you run 3 crews in parallel, they share the limit.
+
+### Model Allowlisting
+
+Restrict which models your agents can use:
+
+```toml
+[llm]
+allowed_models = ["gpt-4", "gpt-4-turbo", "claude-3-5-sonnet-20241022"]
+```
+
+If an agent requests `gpt-3.5-turbo`, Fishnet blocks it.
+
+### Prompt Drift Detection
+
+Detect when agent prompts deviate from expected baselines:
+
+```toml
+[llm.prompt_drift]
+enabled = true
+baseline_source = "auto"
+max_deviation_pct = 15.0
+```
+
+If a crew's system prompt drifts beyond the threshold (potential prompt injection), Fishnet blocks the request and fires an alert.
+
+### Audit Trail
+
+Every crew execution is logged:
+
+```bash
+# View today's crew activity
+fishnet audit --today
+
+# Export audit log
+fishnet audit --export crew_audit.json
+```
+
+Logs include:
+- Agent name and role
+- Task description
+- Model used
+- Token usage (input/output)
+- Cost in USD
+- Timestamp
+- Approval/denial decision
+
+## Advanced Usage
+
+### Tools with Fishnet
+
+CrewAI tools work normally through Fishnet:
+
+```python
+from crewai import Agent, Task, Crew
+from crewai_tools import SerperDevTool, WebsiteSearchTool
+from langchain_openai import ChatOpenAI
+
+# Fishnet-protected LLM
+llm = ChatOpenAI(
+    model="gpt-4",
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder"
+)
+
+search_tool = SerperDevTool()
+web_tool = WebsiteSearchTool()
+
+agent = Agent(
+    role="Research Assistant",
+    goal="Find and analyze web content",
+    backstory="You are a skilled researcher.",
+    tools=[search_tool, web_tool],
+    llm=llm
+)
+
+task = Task(
+    description="Research the benefits of local-first software",
+    agent=agent
+)
+
+crew = Crew(agents=[agent], tasks=[task])
+result = crew.kickoff()
+```
+
+Fishnet logs every tool invocation and LLM call.
+
+### Hierarchical Crews
+
+Fishnet supports hierarchical process flows:
+
+```python
+from crewai import Crew, Process
+
+crew = Crew(
+    agents=[manager, worker1, worker2],
+    tasks=[coordinate_task, execute_task],
+    process=Process.hierarchical,
+    manager_llm=llm  # Manager also protected by Fishnet
+)
+
+result = crew.kickoff()
+```
+
+The manager's LLM calls are also routed through Fishnet.
+
+### Parallel Execution
+
+Run multiple crews with shared rate limits:
+
+```python
+import concurrent.futures
+from crewai import Crew
+
+def run_crew(crew):
+    return crew.kickoff()
+
+crews = [crew1, crew2, crew3]
+
+with concurrent.futures.ThreadPoolExecutor() as executor:
+    results = list(executor.map(run_crew, crews))
+```
+
+Fishnet enforces global rate limits across all parallel crews.
+
+## Monitoring Crew Performance
+
+View real-time metrics in Fishnet's dashboard:
+
+```bash
+open http://localhost:8473
+```
+
+Metrics include:
+- Total requests today
+- Token usage by agent
+- Cost breakdown by model
+- Rate limit headroom
+- Budget remaining
+
+Or query via API:
+
+```bash
+# Today's spend
+curl http://localhost:8473/api/v1/spend
+
+# Audit log
+curl http://localhost:8473/api/v1/audit/list
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Crew fails to start" icon="circle-exclamation">
+    Check that Fishnet is running:
+
+    ```bash
+    fishnet status
+    ```
+
+    Start if needed:
+
+    ```bash
+    fishnet start
+    ```
+  </Accordion>
+
+  <Accordion title="401 Authentication errors" icon="lock">
+    Verify credentials are stored:
+
+    ```bash
+    fishnet list-keys
+    ```
+
+    Add missing keys:
+
+    ```bash
+    fishnet add-key openai sk-...
+    ```
+  </Accordion>
+
+  <Accordion title="Budget exceeded" icon="wallet">
+    Your daily spend cap was hit. Check current spend:
+
+    ```bash
+    fishnet audit --today --summary
+    ```
+
+    Increase budget in `fishnet.toml`:
+
+    ```toml
+    [llm]
+    daily_budget_usd = 500.0
+    ```
+
+    Restart Fishnet:
+
+    ```bash
+    fishnet restart
+    ```
+  </Accordion>
+
+  <Accordion title="Rate limit errors" icon="gauge-high">
+    Your crew is making too many requests. View rate limit config:
+
+    ```bash
+    grep rate_limit fishnet.toml
+    ```
+
+    Increase if needed:
+
+    ```toml
+    [llm]
+    rate_limit_per_minute = 200
+    ```
+
+    Or add delays between tasks in your crew.
+  </Accordion>
+
+  <Accordion title="Slow crew execution" icon="clock">
+    Fishnet adds less than 10ms latency per request. If your crew is slow:
+
+    1. Check upstream provider status
+    2. Review Fishnet logs for errors:
+
+    ```bash
+    tail -f /var/lib/fishnet/logs/fishnet.log
+    ```
+
+    3. Verify you're not hitting provider rate limits
+  </Accordion>
+</AccordionGroup>
+
+## Example: Production-Ready Crew
+
+Here's a full example with error handling and monitoring:
+
+```python
+import os
+import sys
+from crewai import Agent, Task, Crew
+from langchain_openai import ChatOpenAI
+
+# Configure Fishnet
+os.environ["OPENAI_BASE_URL"] = "http://localhost:8473/proxy/openai/v1"
+os.environ["OPENAI_API_KEY"] = "placeholder"
+
+llm = ChatOpenAI(
+    model="gpt-4-turbo",
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="placeholder",
+    temperature=0.5
+)
+
+try:
+    agent = Agent(
+        role="Business Analyst",
+        goal="Analyze market data and provide insights",
+        backstory="You are a senior analyst at a top consulting firm.",
+        llm=llm,
+        verbose=True
+    )
+
+    task = Task(
+        description="Analyze the competitive landscape for AI security tools",
+        agent=agent,
+        expected_output="A comprehensive competitive analysis report"
+    )
+
+    crew = Crew(
+        agents=[agent],
+        tasks=[task],
+        verbose=True
+    )
+
+    print("Starting crew execution (protected by Fishnet)...")
+    result = crew.kickoff()
+    print("\n=== Crew Result ===")
+    print(result)
+
+except Exception as e:
+    print(f"Crew execution failed: {e}", file=sys.stderr)
+    print("\nCheck Fishnet logs:")
+    print("  tail -f /var/lib/fishnet/logs/fishnet.log")
+    print("\nVerify Fishnet is running:")
+    print("  fishnet status")
+    sys.exit(1)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure Spend Limits" icon="coins" href="/concepts/spend-limits">
+    Set budgets and prevent runaway crew costs
+  </Card>
+
+  <Card title="Prompt Drift Detection" icon="shield-halved" href="/security/prompt-drift-detection">
+    Detect prompt injection in agent workflows
+  </Card>
+
+  <Card title="Alerts & Webhooks" icon="webhook" href="/operations/alerts-webhooks">
+    Get notified when crews violate policies
+  </Card>
+
+  <Card title="Audit Trail" icon="list-check" href="/concepts/audit-trail">
+    Review and export all crew executions
+  </Card>
+</CardGroup>

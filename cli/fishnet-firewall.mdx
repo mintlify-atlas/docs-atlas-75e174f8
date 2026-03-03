@@ -1,0 +1,218 @@
+---
+title: fishnet firewall
+description: Enable or disable local-only network lockdown for agent user
+---
+
+## Synopsis
+
+```bash
+fishnet firewall enable [OPTIONS]
+fishnet firewall disable [OPTIONS]
+```
+
+Configures OS-level firewall rules to restrict an AI agent user account to local-only network access. This prevents the agent from making direct external API calls, forcing all traffic through Fishnet's security proxy.
+
+## Subcommands
+
+### enable
+
+Creates firewall rules to block external network access for the agent user.
+
+```bash
+fishnet firewall enable [--agent-user USER] [--apply]
+```
+
+<ParamField path="--agent-user" type="string" optional>
+  Unix username of the AI agent to restrict. If not provided, defaults to the current user ($USER).
+</ParamField>
+
+<ParamField path="--apply" type="boolean" default="false">
+  Apply the firewall rules immediately. Without this flag, the command runs in dry-run mode and shows what would be done.
+</ParamField>
+
+### disable
+
+Removes firewall rules, restoring normal network access for the agent user.
+
+```bash
+fishnet firewall disable [--agent-user USER] [--apply]
+```
+
+<ParamField path="--agent-user" type="string" optional>
+  Unix username of the AI agent to restore access for.
+</ParamField>
+
+<ParamField path="--apply" type="boolean" default="false">
+  Apply the changes immediately. Without this flag, the command runs in dry-run mode.
+</ParamField>
+
+## Examples
+
+### Enable firewall (dry-run)
+
+```bash
+fishnet firewall enable --agent-user agent_runner
+```
+
+**Output (macOS):**
+```
+Firewall enable: dry-run
+  echo 'block drop out quick user agent_runner to any
+pass out quick on lo0 user agent_runner to any' | sudo tee /etc/pf.anchors/com.fishnet.localonly >/dev/null
+  grep -q 'anchor "com.fishnet.localonly"' /etc/pf.conf || echo 'anchor "com.fishnet.localonly"' | sudo tee -a /etc/pf.conf >/dev/null
+  sudo pfctl -f /etc/pf.conf
+  sudo pfctl -e
+Re-run with --apply (or --apply-system) to execute.
+```
+
+**Output (Linux):**
+```
+Firewall enable: dry-run
+  sudo iptables -C OUTPUT -m owner --uid-owner agent_runner ! -o lo -j REJECT 2>/dev/null || sudo iptables -A OUTPUT -m owner --uid-owner agent_runner ! -o lo -j REJECT
+Re-run with --apply (or --apply-system) to execute.
+```
+
+### Enable firewall (apply)
+
+```bash
+fishnet firewall enable --agent-user agent_runner --apply
+```
+
+**Output:**
+```
+Firewall enable: applying 4 command(s)
+Firewall enable: complete.
+```
+
+### Disable firewall (dry-run)
+
+```bash
+fishnet firewall disable --agent-user agent_runner
+```
+
+**Output (macOS):**
+```
+Firewall disable: dry-run
+  sudo rm -f /etc/pf.anchors/com.fishnet.localonly
+  sudo sed -i.bak '/anchor "com.fishnet.localonly"/d' /etc/pf.conf
+  sudo pfctl -f /etc/pf.conf
+  sudo pfctl -d || true
+Re-run with --apply (or --apply-system) to execute.
+```
+
+**Output (Linux):**
+```
+Firewall disable: dry-run
+  sudo iptables -D OUTPUT -m owner --uid-owner agent_runner ! -o lo -j REJECT 2>/dev/null || true
+Re-run with --apply (or --apply-system) to execute.
+```
+
+### Disable firewall (apply)
+
+```bash
+fishnet firewall disable --agent-user agent_runner --apply
+```
+
+**Output:**
+```
+Firewall disable: applying 4 command(s)
+Firewall disable: complete.
+```
+
+## Behavior
+
+### macOS (pf - Packet Filter)
+
+- Creates `/etc/pf.anchors/com.fishnet.localonly` with rules to:
+  - Block all outbound traffic for the agent user
+  - Allow loopback (localhost) traffic
+- Adds anchor reference to `/etc/pf.conf`
+- Reloads and enables pf firewall
+
+### Linux (iptables)
+
+- Adds iptables rule to REJECT outbound traffic for the agent user
+- Allows loopback interface (lo) traffic
+- Uses `--uid-owner` to target specific user
+
+## Security model
+
+With the firewall enabled:
+
+- ✅ Agent can connect to `http://127.0.0.1:3777` (Fishnet proxy)
+- ✅ Agent can access other localhost services
+- ❌ Agent cannot connect to external APIs (api.openai.com, api.anthropic.com, etc.)
+- ❌ Agent cannot bypass Fishnet's security policies
+
+## Error messages
+
+**Invalid username:**
+```
+invalid unix username 'bad-user!': only alphanumeric, underscore, and hyphen are allowed
+```
+Username contains invalid characters. Must be alphanumeric, underscore, or hyphen.
+
+**Username too long:**
+```
+invalid unix username 'verylongusernamethatexceeds32chars': must be 1-32 characters
+```
+Username exceeds 32 characters.
+
+**Invalid username format:**
+```
+invalid unix username '1user': must start with a letter or underscore
+```
+Username must start with a letter or underscore.
+
+**Missing agent user:**
+```
+agent user is required (--agent-user)
+```
+The --agent-user flag is required and $USER environment variable is not set.
+
+**Unsupported OS:**
+```
+firewall command is not supported on this OS
+```
+Firewall management is only supported on macOS and Linux.
+
+**Command failed:**
+```
+command failed (exit status 1): sudo iptables -A OUTPUT -m owner --uid-owner agent_runner ! -o lo -j REJECT
+```
+One of the firewall commands failed (likely permission issue).
+
+## Exit codes
+
+- **0** - Firewall rules applied successfully or dry-run completed
+- **1** - Error occurred (invalid username, unsupported OS, command failed, etc.)
+
+## Permissions
+
+All firewall commands require **sudo** privileges. You will be prompted for your password when using `--apply`.
+
+## Testing
+
+After enabling the firewall, test the lockdown:
+
+```bash
+# As the agent user, this should fail:
+sudo -u agent_runner curl https://api.openai.com/v1/models
+# Expected: Connection timeout or rejected
+
+# This should work:
+sudo -u agent_runner curl http://127.0.0.1:3777/health
+# Expected: {"status":"ok"}
+```
+
+## Platform support
+
+- **macOS** - Uses pf (Packet Filter)
+- **Linux** - Uses iptables
+- **Windows** - Not supported
+
+## Related commands
+
+- [fishnet init](/cli/fishnet-init) - Initial setup may suggest firewall configuration
+- [fishnet start](/cli/fishnet-start) - Start the proxy that the agent will use
+- [fishnet doctor](/cli/fishnet-doctor) - Verify agent configuration

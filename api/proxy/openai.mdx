@@ -1,0 +1,284 @@
+---
+title: OpenAI Proxy
+description: Proxy endpoint for OpenAI API with policy enforcement and cost tracking
+---
+
+## ANY /proxy/openai/*
+
+Proxy requests to OpenAI API with automatic credential injection, policy enforcement, prompt drift detection, and cost tracking. All requests are logged in the audit trail.
+
+### Authentication
+
+Does **not** require session authentication. Uses OpenAI API key from the credential vault.
+
+<Warning>
+  The proxy does not use session tokens. Configure your OpenAI API key in the Fishnet credential vault, and the proxy will automatically inject it into upstream requests.
+</Warning>
+
+### Endpoint Format
+
+```
+POST /proxy/openai/v1/chat/completions
+GET /proxy/openai/v1/models
+POST /proxy/openai/v1/embeddings
+# Any OpenAI API endpoint
+```
+
+The path after `/proxy/openai` is forwarded to the OpenAI API (default: `https://api.openai.com`).
+
+### Request Flow
+
+1. **Rate limiting** (if configured): Check `llm.rate_limit_per_minute`
+2. **LLM guards** (if enabled):
+   - Model allowlist check (`llm.allowed_models`)
+   - Prompt drift detection (`llm.prompt_drift`)
+   - Prompt size limits (`llm.prompt_size_guard`)
+3. **Credential injection**: Retrieve OpenAI API key from vault and add `Authorization: Bearer sk-...` header
+4. **Upstream request**: Forward to OpenAI API
+5. **Cost tracking** (if enabled): Parse usage and record cost based on `llm.model_pricing`
+6. **Audit logging**: Record decision, cost, and cryptographic proof in audit log
+
+### Policy Enforcement
+
+<ParamField path="llm.rate_limit_per_minute" type="integer" default="0">
+  Maximum requests per minute across all LLM providers. 0 = disabled.
+</ParamField>
+
+<ParamField path="llm.allowed_models" type="array" default="[]">
+  List of allowed model names (case-insensitive). Empty = all models allowed.
+  
+  Example: `["gpt-4o", "gpt-4o-mini"]`
+</ParamField>
+
+<ParamField path="llm.prompt_drift.enabled" type="boolean" default="true">
+  Enable prompt drift detection. Records baseline system prompt and alerts on changes.
+</ParamField>
+
+<ParamField path="llm.prompt_drift.mode" type="string" default="alert">
+  Action when drift is detected: `alert` (log warning) or `deny` (block request).
+</ParamField>
+
+<ParamField path="llm.prompt_size_guard.enabled" type="boolean" default="false">
+  Enable prompt size limiting.
+</ParamField>
+
+<ParamField path="llm.prompt_size_guard.max_prompt_tokens" type="integer" default="0">
+  Maximum total characters in prompt (approximate). 0 = no limit.
+</ParamField>
+
+### Cost Tracking
+
+Fishnet tracks token usage and calculates costs based on model pricing:
+
+```toml
+[llm]
+track_spend = true
+
+[llm.model_pricing]
+gpt-4o.input_per_million_usd = 2.50
+gpt-4o.output_per_million_usd = 10.00
+gpt-4o-mini.input_per_million_usd = 0.15
+gpt-4o-mini.output_per_million_usd = 0.60
+```
+
+<Info>
+  For streaming requests to `/v1/chat/completions`, Fishnet automatically injects `stream_options.include_usage: true` to ensure usage data is included in the stream.
+</Info>
+
+### Headers Forwarding
+
+All request headers are forwarded to OpenAI except:
+- `authorization` (replaced with vault credential)
+- `x-api-key` (stripped)
+- `host`, `connection`, `keep-alive`, `transfer-encoding`, `content-length` (HTTP infrastructure)
+
+You can include custom headers like `X-Request-ID` for tracing.
+
+### Body Forwarding
+
+Request bodies are forwarded as-is to OpenAI. For JSON requests, Fishnet parses the body to:
+- Extract the `model` field for allowlist checking
+- Extract the `stream` field to detect streaming requests
+- Extract system prompts for drift detection
+- Count total characters for size limits
+
+### Examples
+
+<CodeGroup>
+
+```bash curl
+curl -X POST http://localhost:3080/proxy/openai/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "What is Fishnet?"}
+    ]
+  }'
+```
+
+```python Python
+import requests
+
+url = "http://localhost:3080/proxy/openai/v1/chat/completions"
+headers = {"Content-Type": "application/json"}
+payload = {
+    "model": "gpt-4o-mini",
+    "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is Fishnet?"}
+    ]
+}
+
+response = requests.post(url, headers=headers, json=payload)
+data = response.json()
+
+# Response includes OpenAI's standard format
+print(data["choices"][0]["message"]["content"])
+
+# Check audit logs to see cost tracking
+# GET /api/audit?service=openai
+```
+
+```javascript JavaScript
+const response = await fetch("http://localhost:3080/proxy/openai/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    model: "gpt-4o-mini",
+    messages: [
+      {role: "system", content: "You are a helpful assistant."},
+      {role: "user", content: "What is Fishnet?"}
+    ]
+  })
+});
+
+const data = await response.json();
+console.log(data.choices[0].message.content);
+```
+
+</CodeGroup>
+
+### Streaming Example
+
+```python
+import requests
+
+url = "http://localhost:3080/proxy/openai/v1/chat/completions"
+payload = {
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Count to 5"}],
+    "stream": True
+}
+
+response = requests.post(url, json=payload, stream=True)
+
+for line in response.iter_lines():
+    if line:
+        line = line.decode('utf-8')
+        if line.startswith('data: '):
+            data = line[6:]
+            if data != '[DONE]':
+                print(data)
+```
+
+<Info>
+  Fishnet automatically adds `stream_options.include_usage: true` to chat completion requests to track token usage in streams.
+</Info>
+
+### Error Responses
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "request body is not valid JSON"}
+  ```
+  Invalid JSON body when Content-Type is application/json.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "model not in allowlist: gpt-4"}
+  ```
+  Model not in `llm.allowed_models` list.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "System prompt drift detected: ..."}
+  ```
+  Prompt drift detected and `llm.prompt_drift.mode = deny`.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "Prompt size 5000 chars exceeds limit of 1000"}
+  ```
+  Prompt exceeds `llm.prompt_size_guard.max_prompt_tokens` when action is `deny`.
+</ResponseField>
+
+<ResponseField name="429 Too Many Requests" type="object">
+  ```json
+  {
+    "error": "rate limit exceeded, retry after 42s",
+    "retry_after_seconds": 42
+  }
+  ```
+  Rate limit exceeded (configured in `llm.rate_limit_per_minute`).
+</ResponseField>
+
+<ResponseField name="502 Bad Gateway" type="object">
+  ```json
+  {"error": "upstream provider is unavailable"}
+  ```
+  Failed to connect to OpenAI API.
+</ResponseField>
+
+### Audit Log Entry
+
+Each proxied request creates an audit log entry:
+
+```json
+{
+  "id": 42,
+  "timestamp": 1709510400000,
+  "intent_type": "api_call",
+  "service": "openai",
+  "action": "POST /v1/chat/completions",
+  "decision": "approved",
+  "reason": null,
+  "cost_usd": 0.000123,
+  "policy_version_hash": "a1b2c3...",
+  "intent_hash": "123456...",
+  "permit_hash": null,
+  "merkle_root": "fedcba..."
+}
+```
+
+Retrieve via `GET /api/audit?service=openai`.
+
+### Configuration
+
+Add your OpenAI API key to the credential vault:
+
+```bash
+# Via Dashboard: Credentials > Add Credential
+# Service: openai
+# Name: (any name, e.g., "primary")
+# Key: sk-...
+```
+
+Or via API:
+
+```bash
+curl -X POST http://localhost:3080/api/credentials \
+  -H "Authorization: Bearer fn_sess_YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service": "openai",
+    "name": "primary",
+    "key": "sk-..."
+  }'
+```

@@ -1,0 +1,141 @@
+---
+title: fishnet restore
+description: Restore encrypted vault backup
+---
+
+## Synopsis
+
+```bash
+fishnet restore FILE [--yes]
+```
+
+Restores the credential vault from a backup file. This overwrites the current vault database.
+
+## Arguments
+
+<ParamField path="FILE" type="string" required>
+  Path to the backup file to restore.
+</ParamField>
+
+<ParamField path="--yes" type="boolean" default="false">
+  Skip the confirmation prompt and restore immediately.
+</ParamField>
+
+## Examples
+
+### Restore with confirmation
+
+```bash
+fishnet restore ~/.local/share/fishnet/backups/vault-20260303-143015.db.bak
+```
+
+**Prompts:**
+```
+Restore vault from '~/.local/share/fishnet/backups/vault-20260303-143015.db.bak' and overwrite current vault? [y/N]: y
+```
+
+**Output:**
+```
+Vault restored from ~/.local/share/fishnet/backups/vault-20260303-143015.db.bak
+```
+
+### Restore without confirmation
+
+```bash
+fishnet restore ~/backups/vault.db.bak --yes
+```
+
+**Output:**
+```
+Vault restored from ~/backups/vault.db.bak
+```
+
+### Restore and verify
+
+```bash
+fishnet restore vault-backup.db.bak --yes
+fishnet list-keys
+```
+
+## Behavior
+
+- Checks if Fishnet is running and refuses to restore if it is
+- Verifies the backup file exists
+- Prompts for confirmation unless `--yes` is used
+- Removes the current vault database
+- Copies the backup file to the vault location
+- Sets file permissions to owner-only (mode 0600)
+
+## Error messages
+
+**Server is running:**
+```
+fishnet appears to be running; stop it before restore
+```
+You must stop Fishnet before restoring. Run `fishnet stop` first.
+
+**Backup file not found:**
+```
+backup file does not exist: ~/backups/vault.db.bak
+```
+The specified backup file does not exist.
+
+**User cancelled:**
+```
+Aborted.
+```
+You responded 'n' or 'no' to the confirmation prompt.
+
+**Failed to create vault directory:**
+```
+failed to create vault dir: <error>
+```
+Cannot create the parent directory for the vault database.
+
+**Failed to remove existing vault:**
+```
+failed to remove existing vault db: <error>
+```
+Cannot delete the current vault file.
+
+**Failed to restore:**
+```
+failed to restore vault backup: <error>
+```
+Could not copy the backup file to the vault location.
+
+## Exit codes
+
+- **0** - Vault restored successfully or user cancelled
+- **1** - Error occurred (server running, file not found, etc.)
+
+## Safety precautions
+
+- Always stop Fishnet before restoring (`fishnet stop`)
+- Verify the backup file before restoring (`ls -lh <file>`)
+- Consider creating a backup of the current vault before restoring
+- Test the restored vault with `fishnet list-keys` after restoration
+
+## Recovery workflow
+
+If you accidentally overwrite credentials:
+
+```bash
+# Stop the server
+fishnet stop
+
+# Restore from backup
+fishnet restore ~/.local/share/fishnet/backups/vault-20260303-143015.db.bak --yes
+
+# Verify credentials
+fishnet list-keys
+
+# Restart the server
+fishnet start
+```
+
+## Related commands
+
+- [fishnet backup](/cli/fishnet-backup) - Create a vault backup
+- [fishnet stop](/cli/fishnet-stop) - Stop the server before restoring
+- [fishnet list-keys](/cli/fishnet-list-keys) - Verify restored credentials

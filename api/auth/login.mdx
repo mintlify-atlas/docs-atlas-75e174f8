@@ -1,0 +1,130 @@
+---
+title: "Login"
+description: "Authenticate with the master password and receive a session token"
+---
+
+## Endpoint
+
+```http
+POST /api/auth/login
+```
+
+## Authentication
+
+No authentication required. Provide the master password to receive a session token.
+
+## Request Body
+
+<ParamField body="password" type="string" required>
+  The master password configured during setup
+</ParamField>
+
+## Response
+
+<ResponseField name="token" type="string" required>
+  Session token to use for authenticated requests. Starts with `fn_sess_` prefix.
+</ResponseField>
+
+<ResponseField name="expires_at" type="string" required>
+  ISO 8601 timestamp indicating when the session expires
+</ResponseField>
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message when authentication fails
+</ResponseField>
+
+<ResponseField name="retry_after_seconds" type="number" optional>
+  Number of seconds to wait before retrying (returned when rate limited)
+</ResponseField>
+
+### Status Codes
+
+- `200 OK` - Authentication successful
+- `401 Unauthorized` - Invalid password
+- `429 Too Many Requests` - Rate limit exceeded after multiple failed attempts
+- `500 Internal Server Error` - Server error during authentication
+
+## Rate Limiting
+
+Fishnet implements progressive rate limiting to prevent brute-force attacks:
+
+- Failed login attempts trigger progressive delays
+- After multiple failures, requests are blocked with 429 status
+- The `retry_after_seconds` field indicates how long to wait
+- Successful login resets the rate limiter
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3742/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"password": "my-secure-password"}'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:3742/api/auth/login",
+    json={"password": "my-secure-password"}
+)
+
+if response.status_code == 200:
+    data = response.json()
+    token = data["token"]
+    expires_at = data["expires_at"]
+    
+    print(f"Login successful!")
+    print(f"Token: {token}")
+    print(f"Expires at: {expires_at}")
+else:
+    error_data = response.json()
+    print(f"Login failed: {error_data['error']}")
+    
+    if response.status_code == 429:
+        print(f"Rate limited. Retry after {error_data['retry_after_seconds']} seconds")
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:3742/api/auth/login', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    password: 'my-secure-password'
+  })
+});
+
+const data = await response.json();
+
+if (response.ok) {
+  console.log('Login successful!');
+  console.log(`Token: ${data.token}`);
+  console.log(`Expires at: ${data.expires_at}`);
+  
+  // Store token for subsequent requests
+  localStorage.setItem('fishnet_token', data.token);
+} else {
+  console.error(`Login failed: ${data.error}`);
+  
+  if (response.status === 429) {
+    console.log(`Rate limited. Retry after ${data.retry_after_seconds} seconds`);
+  }
+}
+```
+
+</CodeGroup>
+
+## Using the Session Token
+
+After successful login, include the token in the `Authorization` header for protected endpoints:
+
+```bash
+curl http://localhost:3742/api/status \
+  -H "Authorization: Bearer fn_sess_..."
+```

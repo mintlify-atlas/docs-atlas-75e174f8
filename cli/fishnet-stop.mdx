@@ -1,0 +1,74 @@
+---
+title: fishnet stop
+description: Stop a running Fishnet server
+---
+
+## Synopsis
+
+```bash
+fishnet stop
+```
+
+Stops a running Fishnet process that was started via the CLI. Sends a SIGTERM signal to the process and waits for graceful shutdown.
+
+## Arguments
+
+This command takes no arguments.
+
+## Examples
+
+### Stop the running server
+
+```bash
+fishnet stop
+```
+
+**Output (when running):**
+```
+Fishnet stopped.
+```
+
+**Output (when not running):**
+```
+Fishnet is not running.
+```
+
+**Output (stale PID file):**
+```
+Fishnet is not running (stale pid file removed).
+```
+
+## Behavior
+
+- Reads the PID file to identify the running process
+- Checks if the process is actually alive
+- Sends SIGTERM signal for graceful shutdown
+- Waits up to 10 seconds for the process to terminate
+- Removes the PID file after successful shutdown
+- Cleans up stale PID files if the process is already dead
+
+## Error messages
+
+**Timeout waiting for shutdown:**
+```
+timed out waiting for process 12345 to stop
+```
+The process did not respond to SIGTERM within 10 seconds.
+
+## Exit codes
+
+- **0** - Server stopped successfully or was not running
+- **1** - Error occurred (timeout, failed to send signal, etc.)
+
+## Platform support
+
+This command is only supported on Unix platforms (Linux, macOS). On other platforms, it will fail with:
+```
+stop is only supported on unix targets in this build
+```
+
+## Related commands
+
+- [fishnet start](/cli/fishnet-start) - Start the Fishnet server
+- [fishnet status](/cli/fishnet-status) - Check if the server is running
+- [fishnet service](/cli/fishnet-service) - Manage system service integration

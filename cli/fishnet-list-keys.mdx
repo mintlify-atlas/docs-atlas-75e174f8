@@ -1,0 +1,98 @@
+---
+title: fishnet list-keys
+description: List stored credentials (service and name only)
+---
+
+## Synopsis
+
+```bash
+fishnet list-keys
+```
+
+Lists all credentials stored in the encrypted vault. For security, only the service name, credential name, and last used timestamp are displayed. The actual API keys are never shown.
+
+## Arguments
+
+This command takes no arguments.
+
+## Examples
+
+### List all credentials
+
+```bash
+fishnet list-keys
+```
+
+**Output:**
+```
+SERVICE              NAME                     LAST_USED   
+openai               production               14:32:15    
+openai               staging                  never       
+anthropic            team-a                   13:45:22    
+anthropic            team-b                   never       
+together             default                  12:10:05    
+```
+
+### When no credentials exist
+
+```bash
+fishnet list-keys
+```
+
+**Output:**
+```
+No credentials stored.
+```
+
+## Output format
+
+Credentials are displayed in a table with the following columns:
+
+- **SERVICE** - API service name (e.g., openai, anthropic)
+- **NAME** - Friendly credential name
+- **LAST_USED** - Time the credential was last used (HH:MM:SS format, UTC), or "never" if unused
+
+## Sorting
+
+Credentials are sorted by:
+1. Service name (alphabetical)
+2. Credential name (alphabetical)
+3. Creation time (newest first) for same service+name combinations
+
+## Behavior
+
+- Unlocks the credential vault using the master password
+- Retrieves metadata for all credentials (does not decrypt the actual keys)
+- Displays in a human-readable table format
+- Shows "never" for credentials that have not been used
+
+## Error messages
+
+**Failed to unlock vault:**
+```
+FISHNET_MASTER_PASSWORD is not set and no usable keychain vault key was found
+```
+The vault could not be unlocked. Set the master password environment variable or use keychain integration.
+
+**Failed to list credentials:**
+```
+failed to list credentials: <error>
+```
+Could not retrieve credentials from the vault database.
+
+## Exit codes
+
+- **0** - Credentials listed successfully (or vault is empty)
+- **1** - Error occurred (vault unlock failed, database error, etc.)
+
+## Environment variables
+
+- `FISHNET_MASTER_PASSWORD` - Master password for vault decryption
+- `FISHNET_KEYCHAIN_SERVICE` - Keychain service name (macOS, default: "fishnet")
+- `FISHNET_KEYCHAIN_ACCOUNT` - Keychain account name (macOS, default: "vault_derived_key")
+
+## Related commands
+
+- [fishnet add-key](/cli/fishnet-add-key) - Add a new credential
+- [fishnet remove-key](/cli/fishnet-remove-key) - Remove a credential
+- [fishnet init](/cli/fishnet-init) - Initialize vault with first credential

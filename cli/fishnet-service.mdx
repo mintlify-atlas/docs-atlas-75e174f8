@@ -1,0 +1,225 @@
+---
+title: fishnet service
+description: Install or uninstall system service integration
+---
+
+## Synopsis
+
+```bash
+fishnet service install [--apply]
+fishnet service uninstall [--apply]
+```
+
+Manages system service integration for Fishnet. Installs or removes LaunchAgent (macOS) or systemd user service (Linux) configuration to start Fishnet automatically on login.
+
+## Subcommands
+
+### install
+
+Installs the system service configuration for automatic startup.
+
+```bash
+fishnet service install [--apply]
+```
+
+<ParamField path="--apply" type="boolean" default="false">
+  Apply the changes immediately. Without this flag, the command runs in dry-run mode and shows what would be done.
+</ParamField>
+
+### uninstall
+
+Removes the system service configuration.
+
+```bash
+fishnet service uninstall [--apply]
+```
+
+<ParamField path="--apply" type="boolean" default="false">
+  Apply the changes immediately. Without this flag, the command runs in dry-run mode.
+</ParamField>
+
+## Examples
+
+### Install (dry-run)
+
+```bash
+fishnet service install
+```
+
+**Output (macOS):**
+```
+Dry-run: service install plan
+  unit path: ~/Library/LaunchAgents/dev.fishnet.local.plist
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+      <dict>
+        <key>Label</key>
+        <string>dev.fishnet.local</string>
+        <key>ProgramArguments</key>
+        <array>
+          <string>/usr/local/bin/fishnet</string>
+          <string>start</string>
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>KeepAlive</key>
+        <true/>
+      </dict>
+    </plist>
+  apply commands:
+    launchctl unload -w ~/Library/LaunchAgents/dev.fishnet.local.plist >/dev/null 2>&1 || true
+    launchctl load -w ~/Library/LaunchAgents/dev.fishnet.local.plist
+Use --apply to execute.
+```
+
+**Output (Linux):**
+```
+Dry-run: service install plan
+  unit path: ~/.config/systemd/user/fishnet.service
+    [Unit]
+    Description=Fishnet local security proxy
+    After=network-online.target
+    
+    [Service]
+    Type=simple
+    ExecStart=/usr/local/bin/fishnet start
+    Restart=on-failure
+    RestartSec=2
+    
+    [Install]
+    WantedBy=default.target
+  apply commands:
+    systemctl --user daemon-reload
+    systemctl --user enable --now fishnet.service
+Use --apply to execute.
+```
+
+### Install (apply)
+
+```bash
+fishnet service install --apply
+```
+
+**Output:**
+```
+Service installed at ~/Library/LaunchAgents/dev.fishnet.local.plist
+```
+
+### Uninstall (dry-run)
+
+```bash
+fishnet service uninstall
+```
+
+**Output (macOS):**
+```
+Dry-run: service uninstall plan
+  unit path: ~/Library/LaunchAgents/dev.fishnet.local.plist
+    launchctl unload -w ~/Library/LaunchAgents/dev.fishnet.local.plist >/dev/null 2>&1 || true
+Use --apply to execute.
+```
+
+**Output (Linux):**
+```
+Dry-run: service uninstall plan
+  unit path: ~/.config/systemd/user/fishnet.service
+    systemctl --user disable --now fishnet.service || true
+    systemctl --user daemon-reload
+Use --apply to execute.
+```
+
+### Uninstall (apply)
+
+```bash
+fishnet service uninstall --apply
+```
+
+**Output:**
+```
+Service uninstalled.
+```
+
+## Behavior
+
+### macOS (LaunchAgent)
+
+- Creates `~/Library/LaunchAgents/dev.fishnet.local.plist`
+- Configures automatic start on login with `RunAtLoad`
+- Enables automatic restart with `KeepAlive`
+- Uses `launchctl` to load/unload the agent
+
+### Linux (systemd user service)
+
+- Creates `~/.config/systemd/user/fishnet.service`
+- Configures automatic start on login
+- Enables automatic restart on failure with 2-second delay
+- Uses `systemctl --user` commands
+
+## Error messages
+
+**Unsupported OS:**
+```
+service install is not supported on this OS
+```
+Service management is only supported on macOS and Linux.
+
+**Failed to create service directory:**
+```
+failed to create service dir: <error>
+```
+Cannot create the directory for the service unit file.
+
+**Failed to write unit:**
+```
+failed to write service unit: <error>
+```
+Cannot write the service configuration file.
+
+**Command failed:**
+```
+command failed (exit status 1): systemctl --user enable --now fishnet.service
+```
+One of the service management commands failed.
+
+## Exit codes
+
+- **0** - Service installed/uninstalled successfully or dry-run completed
+- **1** - Error occurred (unsupported OS, permission denied, command failed, etc.)
+
+## Manual service management
+
+### macOS
+
+```bash
+# Check status
+launchctl list | grep fishnet
+
+# Stop service
+launchctl stop dev.fishnet.local
+
+# Start service
+launchctl start dev.fishnet.local
+```
+
+### Linux
+
+```bash
+# Check status
+systemctl --user status fishnet.service
+
+# Stop service
+systemctl --user stop fishnet.service
+
+# Start service
+systemctl --user start fishnet.service
+
+# View logs
+journalctl --user -u fishnet.service -f
+```
+
+## Related commands
+
+- [fishnet start](/cli/fishnet-start) - Manually start the server
+- [fishnet stop](/cli/fishnet-stop) - Manually stop the server
+- [fishnet status](/cli/fishnet-status) - Check if service is running

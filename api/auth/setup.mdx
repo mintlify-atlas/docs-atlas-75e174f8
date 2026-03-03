@@ -1,0 +1,110 @@
+---
+title: "Setup Master Password"
+description: "Initialize Fishnet by setting the master password (one-time setup)"
+---
+
+## Endpoint
+
+```http
+POST /api/auth/setup
+```
+
+## Authentication
+
+No authentication required. This endpoint can only be called once, before any password is configured.
+
+## Request Body
+
+<ParamField body="password" type="string" required>
+  The master password to configure. Must be at least 8 characters.
+</ParamField>
+
+<ParamField body="confirm" type="string" required>
+  Password confirmation. Must match the `password` field.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates whether the setup was successful
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable status message
+</ResponseField>
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message when the request fails
+</ResponseField>
+
+<ResponseField name="retry_after_seconds" type="number" optional>
+  Number of seconds to wait before retrying (for rate limiting)
+</ResponseField>
+
+### Status Codes
+
+- `200 OK` - Password configured successfully
+- `400 Bad Request` - Invalid input (passwords don't match, too short, etc.)
+- `409 Conflict` - Password already configured
+- `500 Internal Server Error` - Server error during setup
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3742/api/auth/setup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "password": "my-secure-password",
+    "confirm": "my-secure-password"
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:3742/api/auth/setup",
+    json={
+        "password": "my-secure-password",
+        "confirm": "my-secure-password"
+    }
+)
+
+data = response.json()
+if response.status_code == 200:
+    print(f"Setup successful: {data['message']}")
+else:
+    print(f"Error: {data.get('error')}")
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:3742/api/auth/setup', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    password: 'my-secure-password',
+    confirm: 'my-secure-password'
+  })
+});
+
+const data = await response.json();
+if (response.ok) {
+  console.log(`Setup successful: ${data.message}`);
+} else {
+  console.error(`Error: ${data.error}`);
+}
+```
+
+</CodeGroup>
+
+## Validation Rules
+
+- Password must be at least 8 characters long
+- Password and confirm fields must match exactly
+- Can only be called once - returns 409 Conflict if already initialized

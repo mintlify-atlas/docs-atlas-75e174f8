@@ -1,0 +1,406 @@
+---
+title: Binance Configuration
+description: Trading limits, blocked endpoints, and API setup for Binance
+---
+
+Fishnet provides a secure proxy for Binance trading APIs with strict volume limits, blocked endpoints, and automatic HMAC signing.
+
+## Overview
+
+The Binance proxy enforces safety policies on trading operations:
+- **Volume caps**: Per-order and daily USD limits
+- **Endpoint restrictions**: Only allow safe read and trade operations
+- **Hard blocks**: Withdrawals permanently disabled
+- **Automatic signing**: HMAC-SHA256 request signatures handled by Fishnet
+
+Requests are proxied to `/binance/*` and forwarded to `https://api.binance.com`.
+
+## Enable Binance Proxy
+
+```toml
+[binance]
+enabled = true
+base_url = "https://api.binance.com"
+max_order_value_usd = 100.0
+daily_volume_cap_usd = 200.0
+allow_delete_open_orders = false
+recv_window_ms = 5000
+```
+
+<ParamField path="binance.enabled" type="boolean" default="false">
+  Enable Binance API proxying. Disabled by default for safety.
+</ParamField>
+
+<ParamField path="binance.base_url" type="string" default="https://api.binance.com" required>
+  Binance API base URL. Use `https://testnet.binance.vision` for testing.
+  Cannot be empty when `enabled = true`.
+</ParamField>
+
+## Credential Setup
+
+Store Binance API key and secret in Fishnet's encrypted vault:
+
+<Steps>
+  <Step title="Add API Key">
+    ```bash
+    fishnet vault set binance_api_key
+    # Enter your Binance API key when prompted
+    ```
+  </Step>
+
+  <Step title="Add API Secret">
+    ```bash
+    fishnet vault set binance_api_secret
+    # Enter your Binance API secret when prompted
+    ```
+  </Step>
+</Steps>
+
+Fishnet automatically:
+- Adds `timestamp` and `recvWindow` parameters
+- Signs requests with HMAC-SHA256 using the API secret
+- Attaches `X-MBX-APIKEY` header with your API key
+
+## Trading Limits
+
+Fishnet enforces per-order and daily volume limits to prevent runaway trading.
+
+### Per-Order Limit
+
+<ParamField path="binance.max_order_value_usd" type="float" default="500.0">
+  Maximum USD value for a single order. Must be non-negative.
+  Set to 0 to disable per-order limits.
+</ParamField>
+
+```toml
+[binance]
+max_order_value_usd = 100.0
+```
+
+If an order exceeds this limit:
+```json
+{
+  "error": "order value $150.00 exceeds max_order_value_usd $100.00"
+}
+```
+
+### Daily Volume Cap
+
+<ParamField path="binance.daily_volume_cap_usd" type="float" default="2500.0">
+  Maximum total trading volume per UTC day. Tracked across all successful orders.
+  Must be non-negative. Set to 0 to disable daily cap.
+</ParamField>
+
+```toml
+[binance]
+daily_volume_cap_usd = 200.0
+```
+
+Fishnet tracks cumulative order values. If a new order would exceed the cap:
+```json
+{
+  "error": "daily binance volume cap exceeded: $180.00 + $50.00 > $200.00"
+}
+```
+
+Volume resets at midnight UTC.
+
+### Order Value Calculation
+
+Fishnet calculates order value from request parameters:
+
+1. **Quote order quantity** (MARKET orders):
+   ```
+   POST /api/v3/order?symbol=BTCUSDT&quoteOrderQty=100.50&side=BUY&type=MARKET
+   ```
+   Order value = `quoteOrderQty` ($100.50)
+
+2. **Price × Quantity** (LIMIT orders):
+   ```
+   POST /api/v3/order?symbol=BTCUSDT&price=50000&quantity=0.002&side=BUY&type=LIMIT
+   ```
+   Order value = `price * quantity` ($100.00)
+
+3. **USD-quoted pairs only**:
+   - Supported: USDT, USDC, BUSD, FDUSD pairs
+   - Other pairs rejected: `unsupported symbol for USD valuation: BTCEUR`
+
+<Warning>
+  For MARKET orders without `quoteOrderQty`, Fishnet requires the `price` parameter to estimate value. If missing:
+  ```json
+  {
+    "error": "missing price: for MARKET orders please provide quoteOrderQty to express USD value"
+  }
+  ```
+</Warning>
+
+## Allowed Endpoints
+
+Fishnet only allows specific safe endpoints:
+
+### Read-Only (GET)
+
+<Check>Allowed</Check>
+
+- `GET /api/v3/ticker/*` - Price tickers
+- `GET /api/v3/klines` - Candlestick data
+
+These are always allowed and do not require authentication.
+
+### Trading (POST)
+
+<Check>Allowed</Check>
+
+- `POST /api/v3/order` - Place new orders
+
+Requires:
+- Volume limit checks
+- HMAC signature
+- API key authentication
+
+### Dangerous Operations (DELETE)
+
+<Warning>Blocked by default</Warning>
+
+- `DELETE /api/v3/openOrders` - Cancel all open orders
+
+<ParamField path="binance.allow_delete_open_orders" type="boolean" default="false">
+  Allow `DELETE /api/v3/openOrders` to cancel all open orders.
+  Blocked by default as it's a high-impact operation.
+</ParamField>
+
+To enable:
+```toml
+[binance]
+allow_delete_open_orders = true
+```
+
+If blocked, requests return:
+```json
+{
+  "error": "endpoint blocked by default policy: DELETE /api/v3/openOrders"
+}
+```
+
+### Hard-Blocked Endpoints
+
+<Error>Permanently blocked</Error>
+
+- `POST /sapi/v1/capital/withdraw/**` - All withdrawal operations
+
+Withdrawals are **permanently disabled** by Fishnet for safety. Requests return:
+```json
+{
+  "error": "endpoint is hard-blocked by fishnet policy: withdrawals are disabled"
+}
+```
+
+Also triggers a critical alert:
+```json
+{
+  "alert_type": "high_severity_denied_action",
+  "severity": "critical",
+  "service": "binance",
+  "message": "Denied high-severity action POST /sapi/v1/capital/withdraw/apply: hard-blocked endpoint: withdrawals are disabled"
+}
+```
+
+### Other Endpoints
+
+All other endpoints are denied:
+```json
+{
+  "error": "binance endpoint is not allowed by policy"
+}
+```
+
+## Request Signature
+
+Fishnet automatically signs requests with HMAC-SHA256.
+
+### How It Works
+
+1. **Combine parameters**: Query string + request body
+2. **Add timestamp**: Current Unix milliseconds
+3. **Add recvWindow**: From config (default 5000ms)
+4. **Sign**: HMAC-SHA256 using API secret
+5. **Attach signature**: Append to query string
+6. **Add API key header**: `X-MBX-APIKEY`
+
+### recvWindow Configuration
+
+<ParamField path="binance.recv_window_ms" type="integer" default="5000">
+  Binance `recvWindow` parameter - maximum milliseconds between timestamp and server receipt.
+  Must be ≤ 60000ms (Binance limit). Defaults to 5000 if set to 0.
+</ParamField>
+
+```toml
+[binance]
+recv_window_ms = 5000  # 5 second window
+```
+
+If `recvWindow` exceeds 60000:
+```
+Error: binance.recv_window_ms must be <= 60000, got 70000
+```
+
+Lower values are more secure but may fail on clock drift. Higher values (up to 60000) are more forgiving.
+
+## Making Requests
+
+Fishnet handles all authentication. Your agent only needs to call the proxy:
+
+### Get Market Data (No Auth)
+
+```python
+import requests
+
+# Get BTC/USDT price
+response = requests.get(
+    "http://localhost:8473/binance/api/v3/ticker/price",
+    params={"symbol": "BTCUSDT"}
+)
+```
+
+### Place Order (Auto-Signed)
+
+```python
+# Place a limit buy order for 0.001 BTC at $50,000
+response = requests.post(
+    "http://localhost:8473/binance/api/v3/order",
+    params={
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "type": "LIMIT",
+        "timeInForce": "GTC",
+        "quantity": "0.001",
+        "price": "50000"
+    }
+)
+# Fishnet adds: timestamp, recvWindow, signature, X-MBX-APIKEY
+```
+
+### Market Order with Quote Quantity
+
+```python
+# Buy $100 worth of BTC at market price
+response = requests.post(
+    "http://localhost:8473/binance/api/v3/order",
+    params={
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "quoteOrderQty": "100"
+    }
+)
+```
+
+## Spend Tracking
+
+Fishnet records successful order costs:
+
+- Stored in spend database with service `binance`
+- Viewable in dashboard at `/dashboard`
+- Included in audit log with `cost_usd` field
+- Daily cap enforced across all orders
+
+```bash
+# View today's Binance trading volume
+curl -H "Authorization: Bearer $SESSION_TOKEN" \
+  http://localhost:8473/api/spend/today
+
+# Response:
+# [{"service": "binance", "cost_usd": 87.50}]
+```
+
+## Audit Logging
+
+Every Binance request is logged with full context:
+
+```json
+{
+  "id": "aud_...",
+  "intent_type": "api_call",
+  "service": "binance",
+  "action": "POST /api/v3/order",
+  "decision": "approved",
+  "cost_usd": 50.0,
+  "timestamp": 1735689600,
+  "policy_version_hash": "0x1234...",
+  "intent_hash": "0x5678..."
+}
+```
+
+Denied requests include a `reason`:
+```json
+{
+  "decision": "denied",
+  "reason": "order value $150.00 exceeds max_order_value_usd $100.00"
+}
+```
+
+## Alerts
+
+Fishnet can alert on Binance anomalies:
+
+```toml
+[alerts]
+anomalous_volume = true
+new_endpoint = true
+time_anomaly = true
+high_severity_denied_action = true
+```
+
+- **Anomalous volume**: Unusual spike in order frequency
+- **New endpoint**: First time accessing an endpoint
+- **Time anomaly**: Trading at unusual hours
+- **High severity denied**: Withdrawal attempts or blocked operations
+
+## Complete Example
+
+```toml
+# fishnet.toml
+[binance]
+enabled = true
+base_url = "https://api.binance.com"
+
+# Strict limits for AI agent
+max_order_value_usd = 50.0
+daily_volume_cap_usd = 200.0
+
+# Keep dangerous operations blocked
+allow_delete_open_orders = false
+
+# 5-second signature validity window
+recv_window_ms = 5000
+
+[alerts]
+anomalous_volume = true
+high_severity_denied_action = true
+```
+
+Store credentials:
+```bash
+fishnet vault set binance_api_key
+fishnet vault set binance_api_secret
+```
+
+Make a safe order:
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8473/binance/api/v3/order",
+    params={
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "quoteOrderQty": "25.00"  # $25 order, well under $50 limit
+    }
+)
+
+if response.status_code == 200:
+    print(f"Order placed: {response.json()}")
+else:
+    print(f"Denied: {response.json()['error']}")
+```

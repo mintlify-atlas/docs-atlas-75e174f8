@@ -1,0 +1,200 @@
+---
+title: Export Audit Logs
+description: Export audit log entries as CSV with optional filtering
+---
+
+## GET /api/audit/export
+
+Export audit log entries in CSV format with optional filtering. The CSV includes all audit fields and can be imported into spreadsheet applications or data analysis tools.
+
+### Authentication
+
+Requires session authentication via Bearer token in the `Authorization` header.
+
+```bash
+Authorization: Bearer fn_sess_...
+```
+
+### Query Parameters
+
+<ParamField query="from" type="integer" optional>
+  Start timestamp in milliseconds (Unix epoch). Filters entries with `timestamp >= from`.
+</ParamField>
+
+<ParamField query="to" type="integer" optional>
+  End timestamp in milliseconds (Unix epoch). Filters entries with `timestamp <= to`.
+</ParamField>
+
+<ParamField query="service" type="string" optional>
+  Filter by service name (e.g., `openai`, `anthropic`, `binance`, `custom.github`).
+</ParamField>
+
+<ParamField query="decision" type="string" optional>
+  Filter by policy decision. Values: `approved`, `denied`.
+</ParamField>
+
+### Response
+
+Returns a CSV file with the following columns:
+
+- `id` - Unique entry ID
+- `timestamp` - Unix timestamp in milliseconds
+- `intent_type` - Type of intent (currently always `api_call`)
+- `service` - Service name
+- `action` - HTTP method and path
+- `decision` - Policy decision (`approved` or `denied`)
+- `reason` - Denial reason (empty for approved requests)
+- `cost_usd` - Cost in USD (8 decimal places, empty if N/A)
+- `policy_version_hash` - Hex-encoded Keccak256 hash of policy config
+- `intent_hash` - Hex-encoded Keccak256 hash of request intent
+- `permit_hash` - Reserved for on-chain permits (currently empty)
+- `merkle_root` - Hex-encoded Merkle root for integrity verification
+
+### Response Headers
+
+```http
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="audit-log-20260303.csv"
+X-Export-Row-Limit: 100000
+X-Export-Truncated: false
+```
+
+<ResponseField name="Content-Disposition" type="string">
+  Filename includes current UTC date in YYYYMMDD format.
+</ResponseField>
+
+<ResponseField name="X-Export-Row-Limit" type="string">
+  Maximum number of rows that can be exported (100,000).
+</ResponseField>
+
+<ResponseField name="X-Export-Truncated" type="string">
+  Set to `true` if export was truncated due to row limit, `false` otherwise.
+</ResponseField>
+
+### Export Limits
+
+- Maximum rows per export: **100,000**
+- Entries are ordered by ID descending (newest first)
+- If the result exceeds 100,000 rows, `X-Export-Truncated: true` is set
+- Use timestamp filters (`from`, `to`) to export data in batches
+
+### CSV Format Details
+
+- **Formula injection protection**: Cells starting with `=`, `+`, `-`, `@`, tab, or carriage return are prefixed with `'`
+- **Escaping**: Cells containing commas, quotes, or newlines are quoted and internal quotes are doubled
+- **Numeric precision**: `cost_usd` is formatted with 8 decimal places when present
+- **Empty values**: Null fields are represented as empty strings
+
+### Examples
+
+<CodeGroup>
+
+```bash curl
+curl -X GET "http://localhost:3080/api/audit/export?service=openai&from=1709424000000" \
+  -H "Authorization: Bearer fn_sess_YOUR_TOKEN" \
+  -o audit-log.csv
+```
+
+```python Python
+import requests
+from datetime import datetime, timedelta
+
+# Export last 7 days of OpenAI requests
+url = "http://localhost:3080/api/audit/export"
+headers = {"Authorization": "Bearer fn_sess_YOUR_TOKEN"}
+
+# Calculate timestamp for 7 days ago
+from_ts = int((datetime.now() - timedelta(days=7)).timestamp() * 1000)
+
+params = {
+    "service": "openai",
+    "from": from_ts
+}
+
+response = requests.get(url, headers=headers, params=params)
+
+if response.status_code == 200:
+    # Check if export was truncated
+    truncated = response.headers.get('X-Export-Truncated') == 'true'
+    if truncated:
+        print("Warning: Export was truncated to 100,000 rows")
+    
+    # Save to file
+    with open('audit-log.csv', 'wb') as f:
+        f.write(response.content)
+    print("Export saved to audit-log.csv")
+else:
+    print(f"Error: {response.json()['error']}")
+```
+
+```javascript JavaScript
+const url = new URL("http://localhost:3080/api/audit/export");
+url.searchParams.set("service", "openai");
+url.searchParams.set("decision", "denied");
+
+const response = await fetch(url, {
+  headers: {
+    Authorization: "Bearer fn_sess_YOUR_TOKEN"
+  }
+});
+
+if (response.ok) {
+  const truncated = response.headers.get('X-Export-Truncated') === 'true';
+  if (truncated) {
+    console.warn('Export was truncated to 100,000 rows');
+  }
+  
+  const blob = await response.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = 'audit-log.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+} else {
+  const error = await response.json();
+  console.error('Export failed:', error.error);
+}
+```
+
+</CodeGroup>
+
+### Example CSV Output
+
+```csv
+id,timestamp,intent_type,service,action,decision,reason,cost_usd,policy_version_hash,intent_hash,permit_hash,merkle_root
+42,1709510400000,api_call,openai,POST /v1/chat/completions,approved,,0.00012300,a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456,1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef,,fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321
+41,1709510395000,api_call,binance,POST /api/v3/order,denied,"order value $150.00 exceeds max_order_value_usd $100.00",,b2c3d4e5f6a789012345678901234567890abcdef1234567890abcdef1234567,234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12,,edcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321f
+```
+
+### Error Responses
+
+<ResponseField name="401 Unauthorized" type="object">
+  ```json
+  {"error": "unauthorized"}
+  ```
+  Session token is missing, invalid, or expired.
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error" type="object">
+  ```json
+  {"error": "database error: ..."}
+  ```
+  Failed to query the audit database.
+</ResponseField>
+
+### Use Cases
+
+- **Compliance auditing**: Export complete audit trails for regulatory compliance
+- **Cost analysis**: Import into Excel/Google Sheets to analyze API costs over time
+- **Security investigation**: Export denied requests to identify potential security threats
+- **Data archival**: Regular exports for long-term storage and backup
+- **Custom reporting**: Import into BI tools for custom dashboards and visualizations
+
+### Best Practices
+
+1. **Batch exports**: For large datasets, use `from` and `to` timestamps to export in batches
+2. **Monitor truncation**: Check `X-Export-Truncated` header to detect when exports are limited
+3. **Automate backups**: Schedule regular exports to maintain off-site audit log backups
+4. **Filter strategically**: Use service and decision filters to reduce export size

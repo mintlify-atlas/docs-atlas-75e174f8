@@ -1,0 +1,510 @@
+---
+title: Custom Services
+description: Add custom API proxies with authentication, blocked endpoints, and rate limits
+---
+
+Fishnet supports custom service proxies for any HTTP API. Add GitHub, Stripe, Slack, or internal APIs with configurable authentication, endpoint blocking, and rate limiting.
+
+## Overview
+
+Custom services are defined under `[custom.<name>]` in `fishnet.toml`. Each service gets:
+- Automatic credential injection from vault or environment variables
+- Endpoint blocking with glob patterns
+- Independent rate limiting
+- Request anomaly detection
+- Full audit logging
+
+Requests are proxied to `/custom/<name>/*` and forwarded to the configured `base_url`.
+
+## Basic Configuration
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+blocked_endpoints = []
+rate_limit = 100
+rate_limit_window_seconds = 3600
+```
+
+<ParamField path="custom.<name>" type="object">
+  Define a custom service proxy. `<name>` can be any identifier (e.g., `github`, `stripe`, `slack`).
+  The service will be accessible at `/custom/<name>/*`.
+</ParamField>
+
+<ParamField path="custom.<name>.base_url" type="string" required>
+  Upstream API base URL. Cannot be empty.
+
+  **Example values:**
+  - `https://api.github.com`
+  - `https://api.stripe.com`
+  - `https://slack.com/api`
+  - `https://internal.company.com/api`
+</ParamField>
+
+## Authentication
+
+Fishnet can automatically inject authentication headers using credentials from the vault or environment variables.
+
+### From Vault
+
+Store the credential in Fishnet's encrypted vault:
+
+```bash
+fishnet vault set github
+# Enter: ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+Configure authentication header:
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+# No auth_value_env means use vault credential
+```
+
+Fishnet attaches:
+```
+Authorization: Bearer ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+### From Environment Variable
+
+Use an environment variable for the credential:
+
+```bash
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
+```
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+```
+
+Fishnet reads `$GITHUB_TOKEN` at request time and attaches:
+```
+Authorization: Bearer ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+<ParamField path="custom.<name>.auth_header" type="string" default="Authorization">
+  HTTP header name for authentication
+</ParamField>
+
+<ParamField path="custom.<name>.auth_value_prefix" type="string" default="Bearer ">
+  Prefix added before the credential value. Common values:
+  - `Bearer ` (OAuth tokens)
+  - `token ` (GitHub)
+  - `""` (empty for raw API keys)
+</ParamField>
+
+<ParamField path="custom.<name>.auth_value_env" type="string" default="">
+  Environment variable containing the credential.
+  If empty, Fishnet looks for a vault credential with service name `<name>`.
+</ParamField>
+
+### Credential Resolution Order
+
+1. **Vault**: If `auth_value_env` is empty, use vault credential for service `<name>`
+2. **Environment**: If `auth_value_env` is set, read that environment variable
+3. **Error**: If neither exists, request is denied
+
+### Example Configurations
+
+<CodeGroup>
+```toml GitHub (Personal Access Token)
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+```
+
+```toml Stripe (API Key)
+[custom.stripe]
+base_url = "https://api.stripe.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "STRIPE_API_KEY"
+```
+
+```toml Slack (Bot Token)
+[custom.slack]
+base_url = "https://slack.com/api"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "SLACK_BOT_TOKEN"
+```
+
+```toml Internal API (Custom Header)
+[custom.internal]
+base_url = "https://api.internal.company.com"
+auth_header = "X-API-Key"
+auth_value_prefix = ""
+auth_value_env = "INTERNAL_API_KEY"
+```
+</CodeGroup>
+
+## Blocked Endpoints
+
+Prevent dangerous operations using glob patterns.
+
+<ParamField path="custom.<name>.blocked_endpoints" type="array[string]" default="[]">
+  List of endpoint patterns to block. Patterns support:
+  - HTTP method prefix: `DELETE /repos/**`
+  - Glob wildcards: `**` (any path segments), `*` (any characters)
+  - Case-sensitive path matching
+</ParamField>
+
+### Pattern Matching
+
+Patterns are formatted as `METHOD /path/pattern`:
+
+```toml
+[custom.github]
+blocked_endpoints = [
+  "DELETE /repos/**",              # Block all repo deletions
+  "DELETE /orgs/**",               # Block all org deletions
+  "DELETE /orgs/*/members/**",     # Block removing org members
+  "DELETE /teams/*/members/**",    # Block removing team members
+  "PUT /repos/**/admin/**",        # Block admin permission changes
+]
+```
+
+**Pattern rules:**
+- `**` matches any number of path segments
+- `*` matches any characters within a segment
+- Method is case-sensitive (`DELETE` not `delete`)
+- Path matching is case-sensitive
+
+### Example: GitHub Safety Policy
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+
+blocked_endpoints = [
+  # Prevent destructive operations
+  "DELETE /repos/**",
+  "DELETE /orgs/**",
+  "DELETE /user/repos/**",
+  
+  # Prevent removing collaborators
+  "DELETE /repos/**/collaborators/**",
+  "DELETE /orgs/**/members/**",
+  "DELETE /orgs/**/teams/**",
+  "DELETE /teams/**/members/**",
+  
+  # Prevent admin escalation
+  "PUT /repos/**/admin/**",
+  "PATCH /orgs/**/memberships/**",
+]
+```
+
+Blocked requests return:
+```json
+{
+  "error": "endpoint blocked by custom policy"
+}
+```
+
+And trigger a critical alert:
+```json
+{
+  "alert_type": "high_severity_denied_action",
+  "severity": "critical",
+  "service": "custom.github",
+  "message": "Denied high-severity action DELETE /repos/org/repo: blocked by custom policy"
+}
+```
+
+## Rate Limiting
+
+Each custom service has independent rate limiting.
+
+<ParamField path="custom.<name>.rate_limit" type="integer" default="100">
+  Maximum number of requests allowed within the time window
+</ParamField>
+
+<ParamField path="custom.<name>.rate_limit_window_seconds" type="integer" default="3600">
+  Time window in seconds for rate limit (default 1 hour)
+</ParamField>
+
+```toml
+[custom.github]
+rate_limit = 2              # 2 requests
+rate_limit_window_seconds = 60  # per minute
+```
+
+When rate limit is exceeded:
+```json
+{
+  "error": "rate limit exceeded, retry after 42s",
+  "retry_after_seconds": 42
+}
+```
+
+HTTP status: `429 Too Many Requests`
+
+### Common Rate Limit Patterns
+
+```toml
+# Aggressive: 100 requests per hour (production)
+[custom.github]
+rate_limit = 100
+rate_limit_window_seconds = 3600
+
+# Conservative: 2 requests per minute (demo/testing)
+[custom.github]
+rate_limit = 2
+rate_limit_window_seconds = 60
+
+# Permissive: 1000 requests per day
+[custom.internal]
+rate_limit = 1000
+rate_limit_window_seconds = 86400
+```
+
+## Making Requests
+
+Fishnet handles authentication automatically. Your agent just calls the proxy:
+
+### Path Mapping
+
+`/custom/<name>/path` → `<base_url>/path`
+
+**Example:**
+```
+GET /custom/github/user/repos
+→ GET https://api.github.com/user/repos
+```
+
+### Example: GitHub
+
+```python
+import requests
+
+# List repositories (Fishnet adds Authorization header)
+response = requests.get(
+    "http://localhost:8473/custom/github/user/repos"
+)
+
+# Create an issue
+response = requests.post(
+    "http://localhost:8473/custom/github/repos/owner/repo/issues",
+    json={
+        "title": "Bug report",
+        "body": "Something is broken"
+    }
+)
+
+# This would be blocked:
+try:
+    response = requests.delete(
+        "http://localhost:8473/custom/github/repos/owner/repo"
+    )
+except requests.HTTPError as e:
+    print(f"Blocked: {e.response.json()}")
+    # {"error": "endpoint blocked by custom policy"}
+```
+
+### Example: Stripe
+
+```python
+import requests
+
+# Create a customer (Fishnet adds Authorization: Bearer sk_...)
+response = requests.post(
+    "http://localhost:8473/custom/stripe/v1/customers",
+    data={
+        "email": "customer@example.com",
+        "name": "Jane Doe"
+    }
+)
+
+customer = response.json()
+print(f"Created customer: {customer['id']}")
+```
+
+## Connection Pooling
+
+Custom services use Fishnet's HTTP client with connection pooling.
+
+### Per-Service Pool Size
+
+Override the default pool size for a specific custom service:
+
+```toml
+[http]
+pool_max_idle_per_host = 16  # Global default
+
+[http.upstream_pool_max_idle_per_host]
+"custom.github" = 8    # Override for GitHub
+"custom.stripe" = 4    # Override for Stripe
+```
+
+<ParamField path="http.upstream_pool_max_idle_per_host.custom.<name>" type="integer">
+  Maximum idle connections to keep pooled for this custom service.
+  Overrides the global `http.pool_max_idle_per_host` default.
+</ParamField>
+
+Higher values reduce latency for high-throughput services, but consume more memory.
+
+## Audit Logging
+
+Every custom service request is logged:
+
+```json
+{
+  "id": "aud_...",
+  "intent_type": "api_call",
+  "service": "github",
+  "action": "POST /repos/owner/repo/issues",
+  "decision": "approved",
+  "timestamp": 1735689600,
+  "policy_version_hash": "0x1234...",
+  "intent_hash": "0x5678..."
+}
+```
+
+Denied requests include a `reason`:
+```json
+{
+  "decision": "denied",
+  "reason": "endpoint blocked by custom policy"
+}
+```
+
+## Alerts
+
+Custom services support anomaly detection:
+
+```toml
+[alerts]
+anomalous_volume = true
+new_endpoint = true
+time_anomaly = true
+high_severity_denied_action = true
+```
+
+- **Anomalous volume**: Unusual spike in request frequency
+- **New endpoint**: First time accessing a specific endpoint
+- **Time anomaly**: Requests at unusual hours
+- **High severity denied**: Blocked endpoint attempts
+
+Alerts include the service name:
+```json
+{
+  "alert_type": "new_endpoint",
+  "severity": "warning",
+  "service": "custom.github",
+  "message": "New endpoint detected: POST /repos/owner/repo/issues"
+}
+```
+
+## Multiple Custom Services
+
+You can define multiple custom services:
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+blocked_endpoints = ["DELETE /repos/**"]
+rate_limit = 100
+rate_limit_window_seconds = 3600
+
+[custom.stripe]
+base_url = "https://api.stripe.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "STRIPE_API_KEY"
+blocked_endpoints = []
+rate_limit = 50
+rate_limit_window_seconds = 60
+
+[custom.internal]
+base_url = "https://api.internal.company.com"
+auth_header = "X-API-Key"
+auth_value_prefix = ""
+auth_value_env = "INTERNAL_API_KEY"
+blocked_endpoints = ["DELETE /**"]
+rate_limit = 1000
+rate_limit_window_seconds = 86400
+```
+
+Each service has:
+- Independent rate limits
+- Separate credential storage
+- Own connection pool
+- Isolated audit logs
+
+## Complete Example
+
+```toml
+# fishnet.toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+
+# Block destructive operations
+blocked_endpoints = [
+  "DELETE /repos/**",
+  "DELETE /orgs/**",
+  "DELETE /orgs/**/members/**",
+  "DELETE /orgs/**/teams/**",
+  "DELETE /teams/**/members/**",
+  "PUT /repos/**/admin/**",
+]
+
+# Conservative rate limit for safety
+rate_limit = 2
+rate_limit_window_seconds = 60
+
+# Alerts
+[alerts]
+anomalous_volume = true
+new_endpoint = true
+high_severity_denied_action = true
+
+# Connection pooling
+[http.upstream_pool_max_idle_per_host]
+"custom.github" = 8
+```
+
+Set credential:
+```bash
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
+fishnet start
+```
+
+Use from agent:
+```python
+import requests
+
+# Safe operation: create an issue
+response = requests.post(
+    "http://localhost:8473/custom/github/repos/owner/repo/issues",
+    json={"title": "Feature request", "body": "Add dark mode"}
+)
+print(f"Created issue #{response.json()['number']}")
+
+# Blocked operation: delete repo
+response = requests.delete(
+    "http://localhost:8473/custom/github/repos/owner/repo"
+)
+print(response.json())
+# {"error": "endpoint blocked by custom policy"}
+```

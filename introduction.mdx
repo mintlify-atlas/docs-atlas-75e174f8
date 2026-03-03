@@ -1,0 +1,132 @@
+---
+title: Introduction
+description: Local-first security proxy for AI agents. Single Rust binary. Open source. Nothing leaves your machine.
+---
+
+# The only door between your AI agent and the real world
+
+AI agents hold your API keys, make payments, execute trades, and talk to the internet on your behalf — with zero guardrails. Fishnet sits between your agent and the outside world, enforcing the rules you set.
+
+Your agent never touches real credentials. Every request flows through Fishnet. Every decision is logged.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get Fishnet running in under 5 minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install via script, binary, Docker, or Homebrew
+  </Card>
+  <Card title="Credential isolation" icon="lock">
+    API keys live in an encrypted vault. Agents get a localhost proxy.
+  </Card>
+  <Card title="Spend caps & rate limits" icon="gauge">
+    Set daily budgets. When they're hit, the door closes.
+  </Card>
+</CardGroup>
+
+## What Fishnet does
+
+### Credential isolation
+
+Your API keys live in an encrypted vault. The agent gets a localhost proxy. It never sees the real keys.
+
+```bash
+# Agent uses localhost, not real OpenAI API
+export OPENAI_BASE_URL=http://localhost:8473/proxy/openai
+```
+
+### Spend caps & rate limits
+
+Set a daily budget. When it's hit, the door closes. No more $300 surprises from a runaway loop.
+
+```toml
+[llm]
+daily_budget_usd = 10.0
+rate_limit_per_minute = 60
+```
+
+### Endpoint blocking
+
+Withdrawals from your exchange account? Blocked at the proxy layer. Physically impossible through Fishnet.
+
+```toml
+[binance]
+max_order_value_usd = 100.0
+allow_delete_open_orders = false
+```
+
+### Onchain permits
+
+Agent wants to swap on Uniswap? Fishnet checks the contract, the function, the amount — then signs a cryptographic permit. No permit, no execution.
+
+### Tamper-proof audit trail
+
+Every approved and denied action is logged in a Merkle tree. Optionally generate ZK proofs that attest to compliance without revealing what your agent did.
+
+## Who it's for
+
+Anyone running an AI agent with access to paid APIs or real money. If your agent has an OpenAI key, a Binance key, or a funded wallet — you need this.
+
+## How it works
+
+<Steps>
+  <Step title="Agent sends request to localhost">
+    Instead of calling `https://api.openai.com`, your agent calls `http://localhost:8473/proxy/openai`.
+  </Step>
+  <Step title="Fishnet checks policy">
+    Request is validated against spend caps, rate limits, endpoint blocks, and onchain permits.
+  </Step>
+  <Step title="Fishnet injects credentials">
+    Real API key is pulled from the encrypted vault and injected into the outbound request.
+  </Step>
+  <Step title="Request is logged">
+    Every decision (approved or denied) is written to the audit log with cryptographic proof.
+  </Step>
+</Steps>
+
+## Key features
+
+- **Local-first** — Nothing leaves your machine. No cloud dependencies.
+- **Single binary** — Built with Rust. One file, no external assets.
+- **Encrypted vault** — API keys stored with AES-256-GCM encryption.
+- **Real-time monitoring** — Dashboard shows spend, rate limits, and alerts.
+- **Audit logs** — Export to CSV with cryptographic Merkle proofs.
+- **Open source** — MIT license. Audit the code yourself.
+
+## Architecture
+
+```
+┌─────────────┐
+│  AI Agent   │
+└──────┬──────┘
+       │ http://localhost:8473/proxy/openai
+       ▼
+┌─────────────────────────────────────┐
+│           Fishnet Proxy             │
+├─────────────────────────────────────┤
+│ • Spend caps & rate limits          │
+│ • Endpoint blocking                 │
+│ • Credential injection              │
+│ • Audit logging (Merkle tree)       │
+└──────┬──────────────────────────────┘
+       │ https://api.openai.com
+       ▼
+┌─────────────┐
+│  Real APIs  │
+└─────────────┘
+```
+
+<Note>
+Fishnet is in **pre-release**. Core features are stable, but breaking changes may occur before v1.0.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install Fishnet and run your first protected request
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Learn how to configure policies and service integrations
+  </Card>
+</CardGroup>

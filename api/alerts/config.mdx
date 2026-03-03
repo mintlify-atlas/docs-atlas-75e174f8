@@ -1,0 +1,264 @@
+---
+title: "Alert Configuration"
+api: "GET /api/alerts/config | PUT /api/alerts/config"
+description: "Retrieve or update alert toggle settings"
+---
+
+## Authentication
+
+Requires a valid session token in the `Authorization` header:
+
+```
+Authorization: Bearer <session_token>
+```
+
+## GET /api/alerts/config
+
+Retrieve current alert configuration including toggles for each alert type and retention settings.
+
+### Response
+
+<ResponseField name="toggles" type="object">
+  Boolean flags for each alert type
+  
+  <Expandable title="Alert toggles">
+    <ResponseField name="prompt_drift" type="boolean">
+      Enable/disable prompt drift alerts
+    </ResponseField>
+    
+    <ResponseField name="prompt_size" type="boolean">
+      Enable/disable prompt size alerts
+    </ResponseField>
+    
+    <ResponseField name="budget_warning" type="boolean">
+      Enable/disable budget warning alerts
+    </ResponseField>
+    
+    <ResponseField name="budget_exceeded" type="boolean">
+      Enable/disable budget exceeded alerts
+    </ResponseField>
+    
+    <ResponseField name="onchain_denied" type="boolean">
+      Enable/disable on-chain transaction denial alerts
+    </ResponseField>
+    
+    <ResponseField name="rate_limit_hit" type="boolean">
+      Enable/disable rate limit alerts
+    </ResponseField>
+    
+    <ResponseField name="anomalous_volume" type="boolean">
+      Enable/disable anomalous volume alerts
+    </ResponseField>
+    
+    <ResponseField name="new_endpoint" type="boolean">
+      Enable/disable new endpoint detection alerts
+    </ResponseField>
+    
+    <ResponseField name="time_anomaly" type="boolean">
+      Enable/disable time-based anomaly alerts
+    </ResponseField>
+    
+    <ResponseField name="high_severity_denied_action" type="boolean">
+      Enable/disable high-severity action denial alerts
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="retention_days" type="integer">
+  Number of days to retain alert history before automatic cleanup
+</ResponseField>
+
+## PUT /api/alerts/config
+
+Update alert configuration. All fields are optional; only provided fields will be updated.
+
+### Request Body
+
+<ParamField body="prompt_drift" type="boolean" optional>
+  Enable/disable prompt drift alerts
+</ParamField>
+
+<ParamField body="prompt_size" type="boolean" optional>
+  Enable/disable prompt size alerts
+</ParamField>
+
+<ParamField body="budget_warning" type="boolean" optional>
+  Enable/disable budget warning alerts
+</ParamField>
+
+<ParamField body="budget_exceeded" type="boolean" optional>
+  Enable/disable budget exceeded alerts
+</ParamField>
+
+<ParamField body="onchain_denied" type="boolean" optional>
+  Enable/disable on-chain denial alerts
+</ParamField>
+
+<ParamField body="rate_limit_hit" type="boolean" optional>
+  Enable/disable rate limit alerts
+</ParamField>
+
+<ParamField body="anomalous_volume" type="boolean" optional>
+  Enable/disable anomalous volume alerts
+</ParamField>
+
+<ParamField body="new_endpoint" type="boolean" optional>
+  Enable/disable new endpoint alerts
+</ParamField>
+
+<ParamField body="time_anomaly" type="boolean" optional>
+  Enable/disable time anomaly alerts
+</ParamField>
+
+<ParamField body="high_severity_denied_action" type="boolean" optional>
+  Enable/disable high-severity denial alerts
+</ParamField>
+
+<ParamField body="retention_days" type="integer" optional>
+  Number of days to retain alerts (must be positive)
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  Returns `true` if configuration was saved successfully
+</ResponseField>
+
+<ResponseField name="toggles" type="object">
+  Updated alert toggle settings (same structure as GET response)
+</ResponseField>
+
+<ResponseField name="retention_days" type="integer">
+  Updated retention period in days
+</ResponseField>
+
+## Error Responses
+
+- **401 Unauthorized**: Missing or invalid session token
+- **500 Internal Server Error**: Failed to save configuration file
+
+<RequestExample>
+
+```bash GET Request
+curl -X GET https://localhost:3100/api/alerts/config \
+  -H 'Authorization: Bearer fn_sess_abc123def456'
+```
+
+```bash PUT Request
+curl -X PUT https://localhost:3100/api/alerts/config \
+  -H 'Authorization: Bearer fn_sess_abc123def456' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt_drift": true,
+    "budget_warning": false,
+    "retention_days": 90
+  }'
+```
+
+```python Python
+import requests
+
+headers = {
+    "Authorization": "Bearer fn_sess_abc123def456",
+    "Content-Type": "application/json"
+}
+
+# Get current config
+response = requests.get(
+    "https://localhost:3100/api/alerts/config",
+    headers=headers
+)
+print(response.json())
+
+# Update config
+data = {
+    "prompt_drift": True,
+    "budget_warning": False,
+    "retention_days": 90
+}
+
+response = requests.put(
+    "https://localhost:3100/api/alerts/config",
+    headers=headers,
+    json=data
+)
+print(response.json())
+```
+
+```javascript JavaScript
+// Get current config
+let response = await fetch('https://localhost:3100/api/alerts/config', {
+  headers: {
+    'Authorization': 'Bearer fn_sess_abc123def456'
+  }
+});
+
+let data = await response.json();
+console.log(data);
+
+// Update config
+response = await fetch('https://localhost:3100/api/alerts/config', {
+  method: 'PUT',
+  headers: {
+    'Authorization': 'Bearer fn_sess_abc123def456',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    prompt_drift: true,
+    budget_warning: false,
+    retention_days: 90
+  })
+});
+
+data = await response.json();
+console.log(data);
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json GET 200 Response
+{
+  "toggles": {
+    "prompt_drift": true,
+    "prompt_size": true,
+    "budget_warning": true,
+    "budget_exceeded": true,
+    "onchain_denied": true,
+    "rate_limit_hit": true,
+    "anomalous_volume": true,
+    "new_endpoint": true,
+    "time_anomaly": true,
+    "high_severity_denied_action": true
+  },
+  "retention_days": 30
+}
+```
+
+```json PUT 200 Response
+{
+  "success": true,
+  "toggles": {
+    "prompt_drift": true,
+    "prompt_size": true,
+    "budget_warning": false,
+    "budget_exceeded": true,
+    "onchain_denied": true,
+    "rate_limit_hit": true,
+    "anomalous_volume": true,
+    "new_endpoint": true,
+    "time_anomaly": true,
+    "high_severity_denied_action": true
+  },
+  "retention_days": 90
+}
+```
+
+```json 500 Error
+{
+  "error": "failed to save config: permission denied"
+}
+```
+
+</ResponseExample>

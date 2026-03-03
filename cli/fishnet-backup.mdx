@@ -1,0 +1,109 @@
+---
+title: fishnet backup
+description: Export encrypted vault backup
+---
+
+## Synopsis
+
+```bash
+fishnet backup [--output PATH]
+```
+
+Creates a backup copy of the encrypted credential vault. The backup file remains encrypted and can be restored using `fishnet restore`.
+
+## Arguments
+
+<ParamField path="--output" type="string" optional>
+  Path where the backup file should be written. If not specified, uses the default backup directory with a timestamp.
+</ParamField>
+
+## Examples
+
+### Create backup with default location
+
+```bash
+fishnet backup
+```
+
+**Output:**
+```
+Backup written to ~/.local/share/fishnet/backups/vault-20260303-143015.db.bak
+```
+
+### Create backup at custom location
+
+```bash
+fishnet backup --output ~/my-backups/fishnet-vault.db.bak
+```
+
+**Output:**
+```
+Backup written to ~/my-backups/fishnet-vault.db.bak
+```
+
+### Create backup before risky operation
+
+```bash
+fishnet backup
+fishnet remove-key production
+```
+
+## Behavior
+
+- Locates the credential vault database file
+- Copies the encrypted database to the backup location
+- Creates parent directories if they don't exist
+- Sets file permissions to owner-only (mode 0600)
+- Does not require the master password (file is already encrypted)
+
+## Default backup location
+
+**Linux:**
+```
+~/.local/share/fishnet/backups/vault-YYYYMMDD-HHMMSS.db.bak
+```
+
+**macOS:**
+```
+~/Library/Application Support/Fishnet/backups/vault-YYYYMMDD-HHMMSS.db.bak
+```
+
+The timestamp format is: YYYYMMDD-HHMMSS (e.g., 20260303-143015)
+
+## Error messages
+
+**Vault not found:**
+```
+vault database not found at ~/.local/share/fishnet/vault.db
+```
+The vault database does not exist. Run `fishnet init` first.
+
+**Failed to create backup directory:**
+```
+failed to create backup dir: Permission denied
+```
+Cannot create the parent directory for the backup file.
+
+**Failed to copy:**
+```
+failed to copy vault backup: <error>
+```
+Could not copy the vault file to the backup location.
+
+## Exit codes
+
+- **0** - Backup created successfully
+- **1** - Error occurred (vault not found, permission denied, etc.)
+
+## Security notes
+
+- Backup files are encrypted with the same master password as the original vault
+- Store backups in a secure location (encrypted disk, secure cloud storage, etc.)
+- Backup files have owner-only permissions (0600) to prevent unauthorized access
+- Consider keeping multiple backups with different timestamps
+
+## Related commands
+
+- [fishnet restore](/cli/fishnet-restore) - Restore a vault backup
+- [fishnet list-keys](/cli/fishnet-list-keys) - Verify credentials after restore
+- [fishnet init](/cli/fishnet-init) - Initialize a new vault

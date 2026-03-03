@@ -1,0 +1,252 @@
+---
+title: "Get/Update Onchain Config"
+api: "GET /api/onchain/config"
+---
+
+Retrieves or updates the onchain module configuration including limits, permits settings, and whitelisted contracts.
+
+## Authentication
+
+Requires a valid session token in the `Authorization` header:
+
+```
+Authorization: Bearer <session_token>
+```
+
+## GET /api/onchain/config
+
+Retrieves the current onchain configuration.
+
+### Response
+
+<ResponseField name="enabled" type="boolean">
+  Whether the onchain module is enabled
+</ResponseField>
+
+<ResponseField name="chain_ids" type="array">
+  List of allowed blockchain chain IDs (e.g., `[1, 137, 8453]` for Ethereum, Polygon, Base)
+</ResponseField>
+
+<ResponseField name="limits" type="object">
+  Spending and transaction limits
+  
+  <Expandable title="properties">
+    <ResponseField name="max_tx_value_usd" type="number">
+      Maximum value per transaction in USD
+    </ResponseField>
+    
+    <ResponseField name="daily_spend_cap_usd" type="number">
+      Daily spending cap in USD
+    </ResponseField>
+    
+    <ResponseField name="cooldown_seconds" type="integer">
+      Minimum seconds between permit requests
+    </ResponseField>
+    
+    <ResponseField name="max_slippage_bps" type="integer">
+      Maximum slippage in basis points (100 = 1%)
+    </ResponseField>
+    
+    <ResponseField name="max_leverage" type="integer">
+      Maximum leverage multiplier
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="permits" type="object">
+  EIP-712 permit configuration
+  
+  <Expandable title="properties">
+    <ResponseField name="expiry_seconds" type="integer">
+      Permit validity duration in seconds (60-3600)
+    </ResponseField>
+    
+    <ResponseField name="require_policy_hash" type="boolean">
+      Whether to include policy hash in permits
+    </ResponseField>
+    
+    <ResponseField name="verifying_contract" type="string">
+      Ethereum address of the verifying contract (0x + 40 hex chars)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="whitelist" type="object">
+  Map of contract addresses to allowed function selectors
+  
+  Example:
+  ```json
+  {
+    "0x1111111111111111111111111111111111111111": ["0x12345678", "swap(uint256,uint256)"]
+  }
+  ```
+</ResponseField>
+
+<ResponseExample>
+```json
+{
+  "enabled": true,
+  "chain_ids": [1, 8453],
+  "limits": {
+    "max_tx_value_usd": 1000.0,
+    "daily_spend_cap_usd": 5000.0,
+    "cooldown_seconds": 60,
+    "max_slippage_bps": 100,
+    "max_leverage": 10
+  },
+  "permits": {
+    "expiry_seconds": 300,
+    "require_policy_hash": true,
+    "verifying_contract": "0x3333333333333333333333333333333333333333"
+  },
+  "whitelist": {
+    "0x1111111111111111111111111111111111111111": ["0x12345678", "swap(uint256,uint256)"]
+  }
+}
+```
+</ResponseExample>
+
+## PUT /api/onchain/config
+
+Updates the onchain configuration. All fields are optional; only provided fields will be updated.
+
+### Request Body
+
+<ParamField body="enabled" type="boolean">
+  Enable or disable the onchain module
+</ParamField>
+
+<ParamField body="chain_ids" type="array">
+  Array of allowed chain IDs
+</ParamField>
+
+<ParamField body="max_tx_value_usd" type="number">
+  Maximum transaction value (must be >= 0)
+</ParamField>
+
+<ParamField body="daily_spend_cap_usd" type="number">
+  Daily spending cap (must be >= 0)
+</ParamField>
+
+<ParamField body="cooldown_seconds" type="integer">
+  Cooldown between permits (0-86400 seconds)
+</ParamField>
+
+<ParamField body="max_slippage_bps" type="integer">
+  Maximum slippage (0-10000 basis points)
+</ParamField>
+
+<ParamField body="max_leverage" type="integer">
+  Maximum leverage (1-200)
+</ParamField>
+
+<ParamField body="expiry_seconds" type="integer">
+  Permit expiry duration (60-3600 seconds)
+</ParamField>
+
+<ParamField body="require_policy_hash" type="boolean">
+  Whether to include policy hash in permits
+</ParamField>
+
+<ParamField body="verifying_contract" type="string">
+  Verifying contract address (0x + 40 hex characters)
+</ParamField>
+
+<ParamField body="whitelist" type="object">
+  Contract whitelist map
+</ParamField>
+
+### Response
+
+Returns the updated configuration.
+
+<ResponseField name="success" type="boolean">
+  `true` if the update succeeded
+</ResponseField>
+
+Plus all configuration fields (same as GET response).
+
+### Validation Errors (400)
+
+```json
+{
+  "errors": [
+    "max_tx_value_usd must be a non-negative finite number",
+    "expiry_seconds must be between 60 and 3600"
+  ]
+}
+```
+
+## Examples
+
+<CodeGroup>
+```bash cURL (GET)
+curl https://localhost:3978/api/onchain/config \
+  -H "Authorization: Bearer fn_sess_abc123..."
+```
+
+```bash cURL (PUT)
+curl -X PUT https://localhost:3978/api/onchain/config \
+  -H "Authorization: Bearer fn_sess_abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "max_tx_value_usd": 2000.0,
+    "daily_spend_cap_usd": 10000.0
+  }'
+```
+
+```python Python
+import requests
+
+# Get config
+response = requests.get(
+    "https://localhost:3978/api/onchain/config",
+    headers={"Authorization": "Bearer fn_sess_abc123..."}
+)
+config = response.json()
+
+# Update config
+response = requests.put(
+    "https://localhost:3978/api/onchain/config",
+    headers={
+        "Authorization": "Bearer fn_sess_abc123...",
+        "Content-Type": "application/json"
+    },
+    json={
+        "max_tx_value_usd": 2000.0,
+        "cooldown_seconds": 120
+    }
+)
+updated = response.json()
+```
+
+```javascript JavaScript
+// Get config
+const getResponse = await fetch('https://localhost:3978/api/onchain/config', {
+  headers: { 'Authorization': 'Bearer fn_sess_abc123...' }
+});
+const config = await getResponse.json();
+
+// Update config
+const putResponse = await fetch('https://localhost:3978/api/onchain/config', {
+  method: 'PUT',
+  headers: {
+    'Authorization': 'Bearer fn_sess_abc123...',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    max_tx_value_usd: 2000.0,
+    cooldown_seconds: 120
+  })
+});
+const updated = await putResponse.json();
+```
+</CodeGroup>
+
+## Status Codes
+
+- `200` - Success
+- `400` - Validation error (PUT only)
+- `401` - Unauthorized
+- `500` - Failed to save configuration file

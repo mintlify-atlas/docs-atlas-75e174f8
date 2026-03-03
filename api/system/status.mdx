@@ -1,0 +1,148 @@
+---
+title: "Get System Status"
+description: "Retrieve Fishnet runtime status, uptime, and service usage statistics"
+---
+
+## Endpoint
+
+```http
+GET /api/status
+```
+
+## Authentication
+
+**Required.** Include a valid session token in the `Authorization` header.
+
+## Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token obtained from `/api/auth/login`. Format: `Bearer fn_sess_...`
+</ParamField>
+
+## Response
+
+<ResponseField name="running" type="boolean" required>
+  Always `true` - indicates the Fishnet server is running
+</ResponseField>
+
+<ResponseField name="uptime" type="string" required>
+  Human-readable uptime in format like `2h 5m` or `45m`
+</ResponseField>
+
+<ResponseField name="services" type="array" required>
+  List of enabled service names (e.g., `["openai", "anthropic", "binance"]`)
+</ResponseField>
+
+<ResponseField name="today_spend" type="object" required>
+  Map of service names to total spend in USD for the current day
+</ResponseField>
+
+<ResponseField name="today_requests" type="object" required>
+  Map of service names to request counts for the current day
+</ResponseField>
+
+## Response Example
+
+```json
+{
+  "running": true,
+  "uptime": "2h 15m",
+  "services": ["openai", "anthropic", "binance", "onchain"],
+  "today_spend": {
+    "openai": 1.23,
+    "anthropic": 0.45,
+    "binance": 0.0,
+    "onchain": 0.0
+  },
+  "today_requests": {
+    "openai": 42,
+    "anthropic": 15,
+    "binance": 8,
+    "onchain": 3
+  }
+}
+```
+
+## Error Responses
+
+### Status Codes
+
+- `200 OK` - Status retrieved successfully
+- `401 Unauthorized` - Missing or invalid authentication token
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3742/api/status \
+  -H "Authorization: Bearer fn_sess_..."
+```
+
+```python Python
+import requests
+
+token = "fn_sess_..."  # Token from login
+
+response = requests.get(
+    "http://localhost:3742/api/status",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+if response.status_code == 200:
+    data = response.json()
+    
+    print(f"Fishnet is running (uptime: {data['uptime']})")
+    print(f"Enabled services: {', '.join(data['services'])}")
+    print("\nToday's usage:")
+    
+    for service in data['services']:
+        spend = data['today_spend'].get(service, 0)
+        requests_count = data['today_requests'].get(service, 0)
+        print(f"  {service}: {requests_count} requests, ${spend:.2f}")
+else:
+    print(f"Error: {response.status_code}")
+```
+
+```javascript JavaScript
+const token = localStorage.getItem('fishnet_token');
+
+const response = await fetch('http://localhost:3742/api/status', {
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+if (response.ok) {
+  const data = await response.json();
+  
+  console.log(`Fishnet is running (uptime: ${data.uptime})`);
+  console.log(`Enabled services: ${data.services.join(', ')}`);
+  console.log('\nToday\'s usage:');
+  
+  data.services.forEach(service => {
+    const spend = data.today_spend[service] || 0;
+    const requestCount = data.today_requests[service] || 0;
+    console.log(`  ${service}: ${requestCount} requests, $${spend.toFixed(2)}`);
+  });
+} else {
+  console.error(`Error: ${response.status}`);
+}
+```
+
+</CodeGroup>
+
+## Service Discovery
+
+The `services` array includes:
+
+- First-party services with stored credentials (`openai`, `anthropic`)
+- Enabled built-in services (`binance`, `onchain`)
+- Custom services defined in configuration
+
+## Usage Metrics
+
+- `today_spend` tracks actual costs in USD based on token usage and model pricing
+- `today_requests` counts all requests, including those that didn't incur costs
+- Metrics reset at midnight UTC
+- Services with no activity show `0.0` spend and `0` requests

@@ -1,0 +1,331 @@
+---
+title: "Get/Update Policies"
+description: "Retrieve or update Fishnet security policies and configuration"
+---
+
+## Get Policies
+
+```http
+GET /api/policies
+```
+
+### Authentication
+
+**Required.** Include a valid session token in the `Authorization` header.
+
+### Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token obtained from `/api/auth/login`. Format: `Bearer fn_sess_...`
+</ParamField>
+
+### Response
+
+Returns the complete Fishnet configuration object with all security policies.
+
+<ResponseField name="llm" type="object" required>
+  LLM proxy configuration including prompt drift detection, size guards, spend tracking, and model settings
+</ResponseField>
+
+<ResponseField name="http" type="object" required>
+  HTTP client configuration (timeout, max redirects, etc.)
+</ResponseField>
+
+<ResponseField name="dashboard" type="object" required>
+  Dashboard server configuration
+</ResponseField>
+
+<ResponseField name="alerts" type="object" required>
+  Alert system configuration
+</ResponseField>
+
+<ResponseField name="onchain" type="object" required>
+  On-chain transaction policy configuration
+</ResponseField>
+
+<ResponseField name="binance" type="object" required>
+  Binance API proxy configuration including trading limits and blocked endpoints
+</ResponseField>
+
+<ResponseField name="custom" type="object" required>
+  Custom service configurations (key-value map of service configs)
+</ResponseField>
+
+### Response Example
+
+```json
+{
+  "llm": {
+    "prompt_drift": {
+      "enabled": true,
+      "mode": "deny"
+    },
+    "prompt_size_guard": {
+      "enabled": true,
+      "max_prompt_tokens": 4000,
+      "action": "deny"
+    },
+    "track_spend": true,
+    "daily_budget_usd": 20.0,
+    "budget_warning_pct": 80,
+    "rate_limit_per_minute": 60,
+    "allowed_models": [],
+    "model_pricing": {
+      "gpt-4o": {
+        "input_per_million_usd": 2.5,
+        "output_per_million_usd": 10.0
+      }
+    }
+  },
+  "binance": {
+    "enabled": true,
+    "max_order_value_usd": 100.0,
+    "daily_volume_cap_usd": 1000.0,
+    "allow_delete_open_orders": false
+  },
+  "custom": {
+    "github": {
+      "base_url": "https://api.github.com",
+      "auth_header": "Authorization",
+      "auth_value_prefix": "Bearer ",
+      "auth_value_env": "GITHUB_TOKEN",
+      "blocked_endpoints": ["DELETE /repos/*"],
+      "rate_limit": 100,
+      "rate_limit_window_seconds": 3600
+    }
+  }
+}
+```
+
+---
+
+## Update Policies
+
+```http
+PUT /api/policies
+```
+
+### Authentication
+
+**Required.** Include a valid session token in the `Authorization` header.
+
+### Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token obtained from `/api/auth/login`. Format: `Bearer fn_sess_...`
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+### Request Body
+
+Provide a complete `FishnetConfig` object. The configuration will be validated before being applied.
+
+<ParamField body="llm" type="object" required>
+  LLM configuration with all required fields
+</ParamField>
+
+<ParamField body="http" type="object" required>
+  HTTP client configuration
+</ParamField>
+
+<ParamField body="dashboard" type="object" required>
+  Dashboard configuration
+</ParamField>
+
+<ParamField body="alerts" type="object" required>
+  Alerts configuration
+</ParamField>
+
+<ParamField body="onchain" type="object" required>
+  On-chain configuration
+</ParamField>
+
+<ParamField body="binance" type="object" required>
+  Binance configuration
+</ParamField>
+
+<ParamField body="custom" type="object" required>
+  Custom services configuration (can be empty object)
+</ParamField>
+
+### Response
+
+<ResponseField name="saved" type="boolean" required>
+  Indicates whether the configuration was successfully saved
+</ResponseField>
+
+<ResponseField name="policy_hash" type="string" required>
+  Merkle hash of the saved policy version for audit purposes
+</ResponseField>
+
+<ResponseField name="warning" type="string" required>
+  Warning message about configuration persistence behavior
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="error" type="string">
+  Error message when the update fails
+</ResponseField>
+
+#### Status Codes
+
+- `200 OK` - Configuration updated and saved successfully
+- `400 Bad Request` - Invalid JSON or validation failed
+- `401 Unauthorized` - Missing or invalid authentication token
+- `500 Internal Server Error` - Failed to activate or persist configuration
+
+### Validation
+
+The configuration is validated before being applied:
+
+- Model pricing must have non-negative finite values
+- Custom service names must be valid
+- Rate limits must be positive numbers
+- All required fields must be present
+
+If validation fails, the request is rejected with a 400 error and the existing configuration remains unchanged.
+
+### Persistence
+
+When you update policies:
+
+1. The configuration is validated
+2. The new config is activated in the running process
+3. The config is persisted to `fishnet.toml`
+4. If persistence fails, the in-memory config is rolled back
+
+**Important:** This endpoint overwrites `fishnet.toml` and does not preserve comments or formatting.
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL (GET)
+curl http://localhost:3742/api/policies \
+  -H "Authorization: Bearer fn_sess_..."
+```
+
+```bash cURL (PUT)
+curl -X PUT http://localhost:3742/api/policies \
+  -H "Authorization: Bearer fn_sess_..." \
+  -H "Content-Type: application/json" \
+  -d @updated-config.json
+```
+
+```python Python (GET)
+import requests
+
+token = "fn_sess_..."  # Token from login
+
+response = requests.get(
+    "http://localhost:3742/api/policies",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+if response.status_code == 200:
+    policies = response.json()
+    print(f"LLM daily budget: ${policies['llm']['daily_budget_usd']}")
+    print(f"Binance max order: ${policies['binance']['max_order_value_usd']}")
+else:
+    print(f"Error: {response.status_code}")
+```
+
+```python Python (PUT)
+import requests
+import json
+
+token = "fn_sess_..."  # Token from login
+
+# First, get current config
+response = requests.get(
+    "http://localhost:3742/api/policies",
+    headers={"Authorization": f"Bearer {token}"}
+)
+current_config = response.json()
+
+# Modify specific policy
+current_config['llm']['daily_budget_usd'] = 50.0
+current_config['binance']['max_order_value_usd'] = 200.0
+
+# Update policies
+response = requests.put(
+    "http://localhost:3742/api/policies",
+    headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    },
+    json=current_config
+)
+
+if response.status_code == 200:
+    data = response.json()
+    print(f"Policies updated successfully")
+    print(f"Policy hash: {data['policy_hash']}")
+else:
+    error_data = response.json()
+    print(f"Update failed: {error_data['error']}")
+```
+
+```javascript JavaScript (GET)
+const token = localStorage.getItem('fishnet_token');
+
+const response = await fetch('http://localhost:3742/api/policies', {
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+if (response.ok) {
+  const policies = await response.json();
+  console.log(`LLM daily budget: $${policies.llm.daily_budget_usd}`);
+  console.log(`Binance max order: $${policies.binance.max_order_value_usd}`);
+} else {
+  console.error(`Error: ${response.status}`);
+}
+```
+
+```javascript JavaScript (PUT)
+const token = localStorage.getItem('fishnet_token');
+
+// First, get current config
+let response = await fetch('http://localhost:3742/api/policies', {
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+const currentConfig = await response.json();
+
+// Modify specific policies
+currentConfig.llm.daily_budget_usd = 50.0;
+currentConfig.binance.max_order_value_usd = 200.0;
+
+// Update policies
+response = await fetch('http://localhost:3742/api/policies', {
+  method: 'PUT',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify(currentConfig)
+});
+
+if (response.ok) {
+  const data = await response.json();
+  console.log('Policies updated successfully');
+  console.log(`Policy hash: ${data.policy_hash}`);
+} else {
+  const errorData = await response.json();
+  console.error(`Update failed: ${errorData.error}`);
+}
+```
+
+</CodeGroup>
+
+## Hot Reload
+
+Policy updates take effect immediately without restarting Fishnet. All active requests will use the new policies.

@@ -1,0 +1,112 @@
+---
+title: fishnet add-key
+description: Add an API credential to the encrypted vault
+---
+
+## Synopsis
+
+```bash
+fishnet add-key [OPTIONS]
+```
+
+Adds a new API credential to the encrypted vault. Credentials are encrypted at rest and only decrypted in memory when needed for API requests.
+
+## Arguments
+
+<ParamField path="--service" type="string" optional>
+  API service name (e.g., "openai", "anthropic", "together"). If not provided, you will be prompted.
+</ParamField>
+
+<ParamField path="--name" type="string" optional>
+  Friendly name for this credential (e.g., "production", "dev", "team-key"). If not provided, you will be prompted.
+</ParamField>
+
+<ParamField path="--key" type="string" optional>
+  The API key value. If not provided, you will be prompted (input is hidden).
+</ParamField>
+
+## Examples
+
+### Interactive mode
+
+```bash
+fishnet add-key
+```
+
+**Prompts:**
+```
+Service: openai
+Credential name: staging
+API key: ********
+```
+
+**Output:**
+```
+Stored credential 'staging' for service 'openai' (id: 3).
+```
+
+### Non-interactive mode
+
+```bash
+fishnet add-key --service openai --name production --key sk-...
+```
+
+**Output:**
+```
+Stored credential 'production' for service 'openai' (id: 4).
+```
+
+### Add multiple credentials
+
+```bash
+fishnet add-key --service anthropic --name team-a --key sk-ant-...
+fishnet add-key --service anthropic --name team-b --key sk-ant-...
+fishnet add-key --service together --name default --key ...
+```
+
+## Behavior
+
+- Unlocks the credential vault using the master password
+- Validates that service and name are non-empty
+- Stores the credential with AES-256-GCM encryption
+- Returns a unique ID for the credential
+- Allows multiple credentials per service with different names
+- Credentials can have the same name across different services
+
+## Error messages
+
+**Failed to unlock vault:**
+```
+FISHNET_MASTER_PASSWORD is not set and no usable keychain vault key was found
+```
+The vault could not be unlocked. Set the master password environment variable or use keychain integration.
+
+**Failed to add credential:**
+```
+failed to add credential: <error>
+```
+Could not store the credential in the vault database.
+
+**Empty value:**
+```
+Service cannot be empty
+```
+The service, name, or key cannot be blank.
+
+## Exit codes
+
+- **0** - Credential added successfully
+- **1** - Error occurred (vault unlock failed, validation failed, etc.)
+
+## Environment variables
+
+- `FISHNET_MASTER_PASSWORD` - Master password for vault decryption
+- `FISHNET_KEYCHAIN_SERVICE` - Keychain service name (macOS, default: "fishnet")
+- `FISHNET_KEYCHAIN_ACCOUNT` - Keychain account name (macOS, default: "vault_derived_key")
+
+## Related commands
+
+- [fishnet list-keys](/cli/fishnet-list-keys) - List all stored credentials
+- [fishnet remove-key](/cli/fishnet-remove-key) - Remove a credential
+- [fishnet init](/cli/fishnet-init) - Initialize vault and add first credential
+- [fishnet backup](/cli/fishnet-backup) - Backup the encrypted vault

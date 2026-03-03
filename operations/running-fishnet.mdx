@@ -1,0 +1,240 @@
+---
+title: "Running Fishnet"
+description: "Start, stop, and manage the Fishnet security proxy"
+---
+
+## Starting Fishnet
+
+Fishnet can be run in several modes depending on your deployment needs.
+
+### Development Mode
+
+For local development with auto-seeded test data:
+
+<CodeGroup>
+```bash CLI
+fishnet start
+```
+
+```bash Make (Dev)
+make dev-api
+```
+
+```bash Make (Auto-reload)
+make dev-watch
+```
+</CodeGroup>
+
+The server starts on `http://localhost:8473` by default.
+
+### Production Mode
+
+<Steps>
+  <Step title="Build the production binary">
+    ```bash
+    make build-prod
+    ```
+    This embeds the dashboard and creates an optimized release binary.
+  </Step>
+  
+  <Step title="Start the server">
+    ```bash
+    ./target/release/fishnet start
+    ```
+  </Step>
+</Steps>
+
+## Stopping Fishnet
+
+To gracefully stop a running Fishnet process:
+
+```bash
+fishnet stop
+```
+
+This sends a `SIGTERM` signal and waits up to 10 seconds for graceful shutdown. If the process was started by the CLI, the PID file is automatically cleaned up.
+
+## Environment Variables
+
+Fishnet supports several environment variables for configuration:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FISHNET_HOST` | `127.0.0.1` | Host address to bind to |
+| `FISHNET_PORT` | `8473` | Port to listen on |
+| `OPENAI_BASE_URL` | - | Agent should point to `http://localhost:8473/proxy/openai` |
+| `ANTHROPIC_BASE_URL` | - | Agent should point to `http://localhost:8473/proxy/anthropic` |
+| `FISHNET_DEV` | - | Set to `1` to enable development mode features |
+
+<Note>
+Agent environments should configure their base URLs to point through Fishnet:
+
+```bash
+export OPENAI_BASE_URL="http://localhost:8473/proxy/openai"
+export ANTHROPIC_BASE_URL="http://localhost:8473/proxy/anthropic"
+```
+</Note>
+
+## Service Installation
+
+For production deployments, install Fishnet as a system service to start automatically on boot.
+
+<Tabs>
+  <Tab title="macOS (LaunchAgent)">
+    <Steps>
+      <Step title="Preview the install plan">
+        ```bash
+        fishnet service install
+        ```
+        This shows what will be installed without making changes.
+      </Step>
+      
+      <Step title="Apply the installation">
+        ```bash
+        fishnet service install --apply
+        ```
+        Creates `~/Library/LaunchAgents/dev.fishnet.local.plist` and loads the agent.
+      </Step>
+      
+      <Step title="Verify it's running">
+        ```bash
+        launchctl list | grep fishnet
+        fishnet status
+        ```
+      </Step>
+    </Steps>
+    
+    ### Uninstall
+    ```bash
+    fishnet service uninstall --apply
+    ```
+  </Tab>
+  
+  <Tab title="Linux (systemd)">
+    <Steps>
+      <Step title="Preview the install plan">
+        ```bash
+        fishnet service install
+        ```
+        This shows what will be installed without making changes.
+      </Step>
+      
+      <Step title="Apply the installation">
+        ```bash
+        fishnet service install --apply
+        ```
+        Creates `~/.config/systemd/user/fishnet.service` and enables the service.
+      </Step>
+      
+      <Step title="Verify it's running">
+        ```bash
+        systemctl --user status fishnet
+        fishnet status
+        ```
+      </Step>
+    </Steps>
+    
+    ### Uninstall
+    ```bash
+    fishnet service uninstall --apply
+    ```
+  </Tab>
+</Tabs>
+
+## Docker Deployment
+
+Run Fishnet in a container with persistent vault storage:
+
+<Steps>
+  <Step title="Build and start the container">
+    ```bash
+    make docker-up
+    ```
+    This builds the image and starts the container in detached mode.
+  </Step>
+  
+  <Step title="View logs">
+    ```bash
+    make docker-logs
+    ```
+  </Step>
+  
+  <Step title="Stop the container">
+    ```bash
+    make docker-down
+    ```
+  </Step>
+</Steps>
+
+### Docker Compose Configuration
+
+```yaml docker-compose.yml
+services:
+  fishnet:
+    build: .
+    ports:
+      - "8473:8473"
+    volumes:
+      - fishnet-data:/var/lib/fishnet
+    environment:
+      - FISHNET_HOST=0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  fishnet-data:
+```
+
+## Status Monitoring
+
+Check the current runtime status:
+
+```bash
+fishnet status
+```
+
+Example output:
+
+```
+Status: running
+PID: 12345
+Uptime: 3h 24m
+Active alerts: 2 (critical: 0, warning: 2)
+Today's spend (USD):
+  openai           $0.042500
+  anthropic        $0.018300
+Today's requests:
+  openai           47
+  anthropic        23
+```
+
+## Process Management
+
+Fishnet uses a PID file stored in the data directory to track running processes:
+
+- **PID file location**: `~/.local/share/fishnet/fishnet.pid` (Linux) or `~/Library/Application Support/Fishnet/fishnet.pid` (macOS)
+- **Graceful shutdown**: SIGTERM/SIGINT handlers ensure proper cleanup
+- **State persistence**: All databases are flushed before shutdown
+
+<Warning>
+If you see "already running" errors when starting Fishnet, use `fishnet stop` first to clean up any stale processes.
+</Warning>
+
+## Health Checks
+
+Use the `doctor` command to validate your Fishnet installation:
+
+```bash
+fishnet doctor
+```
+
+This checks:
+- Process running status
+- Credential vault accessibility
+- Agent environment variable configuration
+- Upstream API reachability
+
+For JSON output:
+
+```bash
+fishnet doctor --json
+```

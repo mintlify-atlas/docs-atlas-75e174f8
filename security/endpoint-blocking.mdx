@@ -1,0 +1,389 @@
+---
+title: 'Endpoint Blocking'
+description: 'Block dangerous API endpoints using pattern matching and allowlists'
+---
+
+## Overview
+
+Fishnet allows you to block specific API endpoints by HTTP method and path pattern. This prevents agents from accessing destructive operations like deletes, admin actions, or financial withdrawals.
+
+## Configuration
+
+### Custom Service Blocking
+
+Block endpoints for custom proxied services:
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+blocked_endpoints = [
+  "DELETE /repos/**",
+  "DELETE /orgs/**",
+  "DELETE /orgs/**/members/**",
+  "DELETE /orgs/**/teams/**",
+  "DELETE /teams/**/members/**",
+  "PUT /repos/**/admin/**",
+]
+```
+
+**Source**: `~/workspace/source/fishnet.toml:16-23`
+
+### Binance Hard-Blocked Endpoints
+
+Fishnet hard-blocks Binance withdrawal endpoints:
+
+```rust
+if method == Method::POST && route_path.starts_with("/sapi/v1/capital/withdraw/") {
+    emit_high_severity_denied_action_alert(
+        &state,
+        "binance",
+        &action,
+        "hard-blocked endpoint: withdrawals are disabled",
+    )
+    .await;
+    return audited_json_error(
+        &state,
+        &audit_ctx,
+        StatusCode::FORBIDDEN,
+        "endpoint is hard-blocked by fishnet policy: withdrawals are disabled",
+    )
+    .await;
+}
+```
+
+**Source**: `~/workspace/source/crates/server/src/proxy.rs:391-406`
+
+### Binance Dangerous Operations
+
+By default, `DELETE /api/v3/openOrders` is blocked unless explicitly allowed:
+
+```toml
+[binance]
+allow_delete_open_orders = false  # default
+```
+
+This prevents agents from canceling all open orders in a single request.
+
+**Source**: `~/workspace/source/crates/server/src/proxy.rs:413-428`
+
+## Pattern Matching
+
+Fishnet uses glob-style wildcards for endpoint patterns:
+
+### Syntax
+
+- `*`: Matches any single path segment
+- `**`: Matches zero or more path segments
+- Exact match: No wildcards
+
+### Examples
+
+```toml
+blocked_endpoints = [
+  "DELETE /repos/**",           # Blocks: DELETE /repos/owner/name, DELETE /repos/owner/name/issues
+  "PUT /orgs/*/admin/**",       # Blocks: PUT /orgs/myorg/admin/settings
+  "POST /users/delete",         # Blocks: POST /users/delete (exact match)
+]
+```
+
+### Pattern Matching Logic
+
+```rust
+fn endpoint_pattern_matches(pattern: &str, method: &Method, path: &str) -> bool {
+    let (pattern_method, pattern_path) = match pattern.split_once(' ') {
+        Some((m, p)) => (m.trim(), p.trim()),
+        None => return false,
+    };
+
+    if pattern_method != "*" && pattern_method.to_uppercase() != method.as_str() {
+        return false;
+    }
+
+    // Glob-style matching with * and **
+    path_matches_glob(path, pattern_path)
+}
+```
+
+**Source**: `~/workspace/source/crates/server/src/proxy.rs:786-804`
+
+## Endpoint Allowlists
+
+### Binance Read-Only Operations
+
+Fishnet allows read-only market data endpoints:
+
+```rust
+let is_read_only = method == Method::GET
+    && (route_path.starts_with("/api/v3/ticker/") || route_path == "/api/v3/klines");
+```
+
+Allowed endpoints:
+- `GET /api/v3/ticker/*`
+- `GET /api/v3/klines`
+
+**Source**: `~/workspace/source/crates/server/src/proxy.rs:408-409`
+
+### Binance Trading Operations
+
+Allowed trading endpoints (with value limits):
+
+- `POST /api/v3/order` (subject to `max_order_value_usd` and `daily_volume_cap_usd`)
+- `DELETE /api/v3/openOrders` (only if `allow_delete_open_orders = true`)
+
+All other Binance endpoints are blocked by default.
+
+## High-Severity Alerts
+
+When a blocked endpoint is accessed, Fishnet:
+
+1. Creates a **Critical** severity alert
+2. Logs the action to the audit trail
+3. Dispatches webhook notifications (if configured)
+4. Returns `403 Forbidden` to the caller
+
+### Alert Flow
+
+```rust
+emit_high_severity_denied_action_alert(
+    &state,
+    "binance",
+    &action,
+    "hard-blocked endpoint: withdrawals are disabled",
+)
+.await;
+```
+
+This triggers:
+
+```rust
+create_alert_and_dispatch(
+    state,
+    AlertType::HighSeverityDeniedAction,
+    AlertSeverity::Critical,
+    service,
+    format!("Denied high-severity action {action}: {reason}"),
+    "high_severity_denied_action",
+)
+.await;
+```
+
+**Source**: `~/workspace/source/crates/server/src/proxy.rs:1306-1326`
+
+## Custom Services
+
+### Configuration
+
+Add custom services under `[custom.<name>]`:
+
+```toml
+[custom.stripe]
+base_url = "https://api.stripe.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "STRIPE_API_KEY"
+blocked_endpoints = [
+  "POST /v1/transfers",
+  "POST /v1/payouts",
+  "POST /v1/charges",
+  "DELETE /v1/**",
+]
+rate_limit = 10
+rate_limit_window_seconds = 60
+```
+
+### Blocking Logic
+
+```rust
+if service_cfg
+    .blocked_endpoints
+    .iter()
+    .any(|pattern| endpoint_pattern_matches(pattern, &method, &rest))
+{
+    emit_high_severity_denied_action_alert(
+        &state,
+        &custom_service,
+        &action,
+        "blocked by custom policy",
+    )
+    .await;
+    return audited_json_error(
+        &state,
+        &audit_ctx,
+        StatusCode::FORBIDDEN,
+        "endpoint blocked by custom policy",
+    )
+    .await;
+}
+```
+
+**Source**: `~/workspace/source/crates/server/src/proxy.rs:785-804`
+
+## Audit Trail
+
+All blocked requests are logged to the audit database:
+
+```sql
+INSERT INTO audit_entries (
+  intent_type,
+  service,
+  action,
+  decision,
+  reason,
+  timestamp
+) VALUES (
+  'api_call',
+  'binance',
+  'POST /sapi/v1/capital/withdraw/apply',
+  'denied',
+  'endpoint is hard-blocked by fishnet policy: withdrawals are disabled',
+  1700000000
+);
+```
+
+Query denied actions:
+
+```bash
+curl http://localhost:3000/api/audit?decision=denied
+```
+
+## Testing Endpoint Blocks
+
+<Steps>
+  <Step title="Configure blocked endpoints">
+    Add patterns to `fishnet.toml`:
+    ```toml
+    [custom.myapi]
+    blocked_endpoints = ["DELETE /users/**"]
+    ```
+  </Step>
+  <Step title="Restart Fishnet">
+    ```bash
+    fishnet --config fishnet.toml
+    ```
+  </Step>
+  <Step title="Test blocked request">
+    ```bash
+    curl -X DELETE http://localhost:3000/custom/myapi/users/123
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "error": "endpoint blocked by custom policy"
+    }
+    ```
+  </Step>
+  <Step title="Verify alert was created">
+    ```bash
+    curl http://localhost:3000/api/alerts | jq '.alerts[] | select(.alert_type == "high_severity_denied_action")'
+    ```
+  </Step>
+</Steps>
+
+## Best Practices
+
+<Warning>
+  **Start with deny-by-default**: For financial or destructive APIs (Binance, Stripe, AWS), block all endpoints except an explicit allowlist.
+</Warning>
+
+### Financial APIs
+
+```toml
+blocked_endpoints = [
+  "POST /v1/transfers",
+  "POST /v1/payouts",
+  "POST /v1/charges",
+  "DELETE /**",  # Block all deletes
+]
+```
+
+### Infrastructure APIs (AWS, GCP)
+
+```toml
+blocked_endpoints = [
+  "DELETE /**",
+  "POST /**/delete",
+  "POST /**/terminate",
+  "POST /**/destroy",
+  "PUT /**/public",  # Prevent making resources public
+]
+```
+
+### Source Control (GitHub, GitLab)
+
+```toml
+blocked_endpoints = [
+  "DELETE /repos/**",
+  "DELETE /orgs/**",
+  "PUT /repos/**/admin/**",
+  "POST /repos/**/transfer",
+]
+```
+
+## Implementation Details
+
+### Path Matching Algorithm
+
+Fishnet converts glob patterns to regex:
+
+- `**` → `.*` (matches zero or more segments)
+- `*` → `[^/]+` (matches one segment, excluding slashes)
+- Literal characters are escaped
+
+Example:
+```
+Pattern: "DELETE /repos/**/admin/**"
+Regex:   "^DELETE /repos/.*/admin/.*$"
+```
+
+### Method Matching
+
+Method matching is case-insensitive:
+
+```rust
+pattern_method.to_uppercase() == method.as_str()
+```
+
+Wildcard `*` matches any method:
+
+```toml
+blocked_endpoints = [
+  "* /admin/**",  # Block all methods to /admin/*
+]
+```
+
+## Error Responses
+
+### Blocked Endpoint
+
+**Status**: `403 Forbidden`
+
+```json
+{
+  "error": "endpoint blocked by custom policy"
+}
+```
+
+### Hard-Blocked Endpoint (Binance Withdrawals)
+
+**Status**: `403 Forbidden`
+
+```json
+{
+  "error": "endpoint is hard-blocked by fishnet policy: withdrawals are disabled"
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Onchain Permits" icon="shield-check" href="/security/onchain-permits">
+    Sign EIP-712 permits for blockchain transactions
+  </Card>
+  <Card title="ZK Proofs" icon="fingerprint" href="/security/zk-proofs">
+    Generate Merkle proofs for compliance attestation
+  </Card>
+</CardGroup>

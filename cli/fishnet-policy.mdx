@@ -1,0 +1,135 @@
+---
+title: fishnet policy
+description: Manage security policies in fishnet.toml
+---
+
+## Synopsis
+
+```bash
+fishnet policy edit
+```
+
+Opens the Fishnet configuration file (fishnet.toml) in your default text editor for editing security policies, rate limits, spend budgets, and other settings.
+
+## Subcommands
+
+### edit
+
+Opens fishnet.toml in the editor specified by the `EDITOR` environment variable (defaults to `vi`).
+
+```bash
+fishnet policy edit
+```
+
+## Examples
+
+### Edit with default editor
+
+```bash
+fishnet policy edit
+```
+
+**Output:**
+```
+Policy file updated: ~/.config/fishnet/fishnet.toml
+```
+
+### Edit with specific editor
+
+```bash
+EDITOR=nano fishnet policy edit
+```
+
+```bash
+EDITOR=code fishnet policy edit  # VS Code
+```
+
+```bash
+EDITOR=emacs fishnet policy edit
+```
+
+### Edit custom config location
+
+```bash
+fishnet --config /path/to/custom.toml policy edit
+```
+
+## Behavior
+
+- Locates the configuration file (default or custom path)
+- Creates a default configuration file if it doesn't exist
+- Opens the file in `$EDITOR` (falls back to `vi` if not set)
+- Waits for the editor to exit
+- The server watches for file changes and reloads automatically
+
+## Configuration file structure
+
+The fishnet.toml file contains:
+
+```toml
+[llm]
+daily_budget_usd = 10.0
+rate_limit_per_minute = 60
+
+[llm.prompt_drift]
+enabled = true
+reset_baseline_on_restart = false
+hash_chars = 512
+ignore_whitespace = true
+hash_algorithm = "blake3"
+
+[alerts]
+retention_days = 90
+
+[http]
+connect_timeout_ms = 5000
+request_timeout_ms = 120000
+pool_idle_timeout_secs = 90
+pool_max_idle_per_host = 32
+```
+
+See the [Configuration Reference](/config/fishnet-toml) for detailed documentation.
+
+## Error messages
+
+**Editor failed:**
+```
+failed to launch editor: <error>
+```
+Could not start the editor process.
+
+**Editor exited with error:**
+```
+editor exited with status: exit status 1
+```
+The editor exited with a non-zero status code.
+
+**Config path not found:**
+```
+could not determine config path
+```
+Cannot locate the configuration file location.
+
+## Exit codes
+
+- **0** - Configuration file edited successfully
+- **1** - Error occurred (editor failed, config path not found, etc.)
+
+## Tips
+
+- Changes take effect immediately if Fishnet is running (config file is watched)
+- Invalid configuration will be rejected on reload with an error message
+- Use `fishnet doctor` to verify configuration changes
+- Comment lines start with `#`
+- Restart Fishnet if configuration changes are not applied
+
+## Environment variables
+
+- `EDITOR` - Text editor to use (default: vi)
+- `VISUAL` - Alternative editor variable (EDITOR takes precedence)
+
+## Related commands
+
+- [fishnet init](/cli/fishnet-init) - Initialize configuration during first-time setup
+- [fishnet doctor](/cli/fishnet-doctor) - Validate configuration
+- [fishnet start](/cli/fishnet-start) - Start server with configuration

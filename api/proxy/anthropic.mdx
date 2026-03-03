@@ -1,0 +1,296 @@
+---
+title: Anthropic Proxy
+description: Proxy endpoint for Anthropic API with policy enforcement and cost tracking
+---
+
+## ANY /proxy/anthropic/*
+
+Proxy requests to Anthropic API with automatic credential injection, policy enforcement, prompt drift detection, and cost tracking. All requests are logged in the audit trail.
+
+### Authentication
+
+Does **not** require session authentication. Uses Anthropic API key from the credential vault.
+
+<Warning>
+  The proxy does not use session tokens. Configure your Anthropic API key in the Fishnet credential vault, and the proxy will automatically inject it into upstream requests.
+</Warning>
+
+### Endpoint Format
+
+```
+POST /proxy/anthropic/v1/messages
+POST /proxy/anthropic/v1/complete
+# Any Anthropic API endpoint
+```
+
+The path after `/proxy/anthropic` is forwarded to the Anthropic API (default: `https://api.anthropic.com`).
+
+### Request Flow
+
+1. **Rate limiting** (if configured): Check `llm.rate_limit_per_minute`
+2. **LLM guards** (if enabled):
+   - Model allowlist check (`llm.allowed_models`)
+   - Prompt drift detection (`llm.prompt_drift`)
+   - Prompt size limits (`llm.prompt_size_guard`)
+3. **Credential injection**: Retrieve Anthropic API key from vault and add `x-api-key` header
+4. **Upstream request**: Forward to Anthropic API
+5. **Cost tracking** (if enabled): Parse usage and record cost based on `llm.model_pricing`
+6. **Audit logging**: Record decision, cost, and cryptographic proof in audit log
+
+### Policy Enforcement
+
+<ParamField path="llm.rate_limit_per_minute" type="integer" default="0">
+  Maximum requests per minute across all LLM providers. 0 = disabled.
+</ParamField>
+
+<ParamField path="llm.allowed_models" type="array" default="[]">
+  List of allowed model names (case-insensitive). Empty = all models allowed.
+  
+  Example: `["claude-4.5-sonnet", "claude-3.5-haiku"]`
+</ParamField>
+
+<ParamField path="llm.prompt_drift.enabled" type="boolean" default="true">
+  Enable prompt drift detection. Records baseline system prompt and alerts on changes.
+</ParamField>
+
+<ParamField path="llm.prompt_drift.mode" type="string" default="alert">
+  Action when drift is detected: `alert` (log warning) or `deny` (block request).
+</ParamField>
+
+<ParamField path="llm.prompt_size_guard.enabled" type="boolean" default="false">
+  Enable prompt size limiting.
+</ParamField>
+
+<ParamField path="llm.prompt_size_guard.max_prompt_tokens" type="integer" default="0">
+  Maximum total characters in prompt (approximate). 0 = no limit.
+</ParamField>
+
+### Cost Tracking
+
+Fishnet tracks token usage and calculates costs based on model pricing:
+
+```toml
+[llm]
+track_spend = true
+
+[llm.model_pricing]
+"claude-4.5-sonnet".input_per_million_usd = 3.00
+"claude-4.5-sonnet".output_per_million_usd = 15.00
+"claude-3.5-haiku".input_per_million_usd = 0.80
+"claude-3.5-haiku".output_per_million_usd = 4.00
+```
+
+<Info>
+  Anthropic's Messages API includes usage in both streaming and non-streaming responses. Fishnet parses `usage.input_tokens` and `usage.output_tokens` from the response.
+</Info>
+
+### Headers Forwarding
+
+All request headers are forwarded to Anthropic except:
+- `x-api-key` (replaced with vault credential)
+- `authorization` (stripped)
+- `host`, `connection`, `keep-alive`, `transfer-encoding`, `content-length` (HTTP infrastructure)
+
+Required Anthropic headers like `anthropic-version` are forwarded as-is.
+
+### Body Forwarding
+
+Request bodies are forwarded as-is to Anthropic. For JSON requests, Fishnet parses the body to:
+- Extract the `model` field for allowlist checking
+- Extract the `stream` field to detect streaming requests
+- Extract system prompts from messages for drift detection
+- Count total characters for size limits
+
+### Examples
+
+<CodeGroup>
+
+```bash curl
+curl -X POST http://localhost:3080/proxy/anthropic/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-4.5-sonnet",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "What is Fishnet?"}
+    ]
+  }'
+```
+
+```python Python
+import requests
+
+url = "http://localhost:3080/proxy/anthropic/v1/messages"
+headers = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01"
+}
+payload = {
+    "model": "claude-4.5-sonnet",
+    "max_tokens": 1024,
+    "messages": [
+        {"role": "user", "content": "What is Fishnet?"}
+    ]
+}
+
+response = requests.post(url, headers=headers, json=payload)
+data = response.json()
+
+# Response includes Anthropic's standard format
+print(data["content"][0]["text"])
+print(f"Tokens: {data['usage']['input_tokens']} in, {data['usage']['output_tokens']} out")
+
+# Check audit logs to see cost tracking
+# GET /api/audit?service=anthropic
+```
+
+```javascript JavaScript
+const response = await fetch("http://localhost:3080/proxy/anthropic/v1/messages", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01"
+  },
+  body: JSON.stringify({
+    model: "claude-4.5-sonnet",
+    max_tokens: 1024,
+    messages: [
+      {role: "user", content: "What is Fishnet?"}
+    ]
+  })
+});
+
+const data = await response.json();
+console.log(data.content[0].text);
+console.log(`Tokens: ${data.usage.input_tokens} in, ${data.usage.output_tokens} out`);
+```
+
+</CodeGroup>
+
+### Streaming Example
+
+```python
+import requests
+import json
+
+url = "http://localhost:3080/proxy/anthropic/v1/messages"
+headers = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01"
+}
+payload = {
+    "model": "claude-4.5-sonnet",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Count to 5"}],
+    "stream": True
+}
+
+response = requests.post(url, headers=headers, json=payload, stream=True)
+
+for line in response.iter_lines():
+    if line:
+        line = line.decode('utf-8')
+        if line.startswith('data: '):
+            data = line[6:]
+            event = json.loads(data)
+            print(event)
+```
+
+<Info>
+  Anthropic includes usage in streaming responses via `message_start` and `message_delta` events. Fishnet accumulates these to track total cost.
+</Info>
+
+### Error Responses
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "request body is not valid JSON"}
+  ```
+  Invalid JSON body when Content-Type is application/json.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "model not in allowlist: claude-2.1"}
+  ```
+  Model not in `llm.allowed_models` list.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "System prompt drift detected: ..."}
+  ```
+  Prompt drift detected and `llm.prompt_drift.mode = deny`.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "Prompt size 5000 chars exceeds limit of 1000"}
+  ```
+  Prompt exceeds `llm.prompt_size_guard.max_prompt_tokens` when action is `deny`.
+</ResponseField>
+
+<ResponseField name="429 Too Many Requests" type="object">
+  ```json
+  {
+    "error": "rate limit exceeded, retry after 42s",
+    "retry_after_seconds": 42
+  }
+  ```
+  Rate limit exceeded (configured in `llm.rate_limit_per_minute`).
+</ResponseField>
+
+<ResponseField name="502 Bad Gateway" type="object">
+  ```json
+  {"error": "upstream provider is unavailable"}
+  ```
+  Failed to connect to Anthropic API.
+</ResponseField>
+
+### Audit Log Entry
+
+Each proxied request creates an audit log entry:
+
+```json
+{
+  "id": 43,
+  "timestamp": 1709510405000,
+  "intent_type": "api_call",
+  "service": "anthropic",
+  "action": "POST /v1/messages",
+  "decision": "approved",
+  "reason": null,
+  "cost_usd": 0.004567,
+  "policy_version_hash": "a1b2c3...",
+  "intent_hash": "234567...",
+  "permit_hash": null,
+  "merkle_root": "edcba9..."
+}
+```
+
+Retrieve via `GET /api/audit?service=anthropic`.
+
+### Configuration
+
+Add your Anthropic API key to the credential vault:
+
+```bash
+# Via Dashboard: Credentials > Add Credential
+# Service: anthropic
+# Name: (any name, e.g., "primary")
+# Key: sk-ant-...
+```
+
+Or via API:
+
+```bash
+curl -X POST http://localhost:3080/api/credentials \
+  -H "Authorization: Bearer fn_sess_YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service": "anthropic",
+    "name": "primary",
+    "key": "sk-ant-..."
+  }'
+```

@@ -1,0 +1,91 @@
+---
+title: "Logout"
+description: "Invalidate the current session token"
+---
+
+## Endpoint
+
+```http
+POST /api/auth/logout
+```
+
+## Authentication
+
+**Required.** Include the session token in the `Authorization` header.
+
+If no valid token is provided, this endpoint returns `401 Unauthorized`.
+
+## Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token obtained from `/api/auth/login`. Format: `Bearer fn_sess_...`
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Always `true` when logout succeeds
+</ResponseField>
+
+## Error Responses
+
+### Status Codes
+
+- `200 OK` - Session invalidated successfully
+- `401 Unauthorized` - No valid authentication token provided
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3742/api/auth/logout \
+  -H "Authorization: Bearer fn_sess_..."
+```
+
+```python Python
+import requests
+
+token = "fn_sess_..."  # Token from login
+
+response = requests.post(
+    "http://localhost:3742/api/auth/logout",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+if response.status_code == 200:
+    data = response.json()
+    print("Logged out successfully")
+else:
+    print(f"Logout failed: {response.status_code}")
+```
+
+```javascript JavaScript
+const token = localStorage.getItem('fishnet_token');
+
+const response = await fetch('http://localhost:3742/api/auth/logout', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+if (response.ok) {
+  const data = await response.json();
+  console.log('Logged out successfully');
+  
+  // Clear stored token
+  localStorage.removeItem('fishnet_token');
+} else {
+  console.error(`Logout failed: ${response.status}`);
+}
+```
+
+</CodeGroup>
+
+## Behavior Notes
+
+- The session token is immediately invalidated and cannot be reused
+- If the token was already invalid or expired, the endpoint still returns `200 OK`
+- After logout, you must call `/api/auth/login` again to get a new token
+- Logout does not affect other active sessions if you're logged in from multiple clients

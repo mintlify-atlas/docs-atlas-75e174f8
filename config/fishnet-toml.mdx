@@ -1,0 +1,394 @@
+---
+title: fishnet.toml
+description: Complete reference for Fishnet configuration file
+---
+
+Fishnet is configured through a `fishnet.toml` file located at `/var/lib/fishnet/fishnet.toml` (Linux) or `/Library/Application Support/Fishnet/fishnet.toml` (macOS). You can override this location with the `FISHNET_CONFIG` environment variable.
+
+## Configuration File Location
+
+Fishnet searches for configuration in the following order:
+
+1. Path specified via `--config` CLI flag
+2. Path in `FISHNET_CONFIG` environment variable
+3. System data directory (`/var/lib/fishnet/fishnet.toml` or `/Library/Application Support/Fishnet/fishnet.toml`)
+4. Legacy home directory (`~/.fishnet/fishnet.toml`)
+
+If no configuration file is found, Fishnet uses built-in defaults.
+
+## LLM Configuration
+
+Configure AI model guardrails, spend tracking, and rate limiting.
+
+### Basic Settings
+
+<ParamField path="llm.track_spend" type="boolean" default="true">
+  Enable automatic cost tracking for LLM API requests
+</ParamField>
+
+<ParamField path="llm.daily_budget_usd" type="float" default="20.0">
+  Daily spending limit in USD for all LLM providers combined (OpenAI + Anthropic)
+</ParamField>
+
+<ParamField path="llm.budget_warning_pct" type="integer" default="80">
+  Percentage of daily budget that triggers a warning alert (0-100)
+</ParamField>
+
+<ParamField path="llm.rate_limit_per_minute" type="integer" default="60">
+  Maximum LLM requests per minute per provider. Set to 0 to disable.
+</ParamField>
+
+<ParamField path="llm.allowed_models" type="array[string]" default="[]">
+  Whitelist of allowed model names. Empty array allows all models. Case-insensitive matching.
+
+  ```toml
+  [llm]
+  allowed_models = ["gpt-4o", "gpt-4o-mini", "claude-sonnet"]
+  ```
+</ParamField>
+
+### Model Pricing
+
+Define per-token costs for accurate spend tracking. Fishnet includes defaults for common models.
+
+<ParamField path="llm.model_pricing" type="map[string, ModelPricing]">
+  Map of model names to pricing information. Keys are trimmed and normalized.
+
+  **Default pricing included:**
+  - `gpt-4o`: $2.50 / $10.00 per million tokens (input/output)
+  - `gpt-4o-mini`: $0.15 / $0.60 per million tokens
+  - `claude-sonnet`: $3.00 / $15.00 per million tokens
+
+  ```toml
+  [llm.model_pricing.gpt-4o]
+  input_per_million_usd = 2.50
+  output_per_million_usd = 10.0
+
+  [llm.model_pricing."claude-sonnet"]
+  input_per_million_usd = 3.0
+  output_per_million_usd = 15.0
+  ```
+</ParamField>
+
+<ParamField path="llm.model_pricing.<model>.input_per_million_usd" type="float" required>
+  Cost per million input tokens in USD. Must be non-negative.
+</ParamField>
+
+<ParamField path="llm.model_pricing.<model>.output_per_million_usd" type="float" required>
+  Cost per million output tokens in USD. Must be non-negative.
+</ParamField>
+
+### Prompt Drift Detection
+
+Detect when system prompts change unexpectedly.
+
+<ParamField path="llm.prompt_drift.enabled" type="boolean" default="true">
+  Enable prompt drift detection
+</ParamField>
+
+<ParamField path="llm.prompt_drift.mode" type="enum" default="alert">
+  Action to take when drift is detected:
+  - `alert`: Log alert and allow request
+  - `deny`: Reject the request
+  - `ignore`: Disable drift checking
+</ParamField>
+
+<ParamField path="llm.prompt_drift.hash_chars" type="integer" default="0">
+  Number of characters from start of prompt to hash. 0 means hash entire prompt.
+</ParamField>
+
+<ParamField path="llm.prompt_drift.hash_algorithm" type="enum" default="keccak256">
+  Hash algorithm for prompt fingerprinting. Currently only `keccak256` is supported.
+</ParamField>
+
+<ParamField path="llm.prompt_drift.ignore_whitespace" type="boolean" default="true">
+  Normalize whitespace before hashing to reduce false positives
+</ParamField>
+
+<ParamField path="llm.prompt_drift.reset_baseline_on_restart" type="boolean" default="true">
+  Clear baseline prompt hashes when Fishnet restarts
+</ParamField>
+
+### Prompt Size Guard
+
+Prevent excessively large prompts that could cause runaway costs.
+
+<ParamField path="llm.prompt_size_guard.enabled" type="boolean" default="true">
+  Enable prompt size enforcement
+</ParamField>
+
+<ParamField path="llm.prompt_size_guard.max_prompt_tokens" type="integer" default="50000">
+  Maximum allowed tokens in a prompt. Estimated at 4 characters per token.
+</ParamField>
+
+<ParamField path="llm.prompt_size_guard.max_prompt_chars" type="integer" default="0">
+  Maximum allowed characters in a prompt. 0 means no character limit (only token limit applies).
+</ParamField>
+
+<ParamField path="llm.prompt_size_guard.action" type="enum" default="deny">
+  Action when prompt exceeds size limits:
+  - `deny`: Reject the request
+  - `alert`: Log alert and allow request
+</ParamField>
+
+## HTTP Client Configuration
+
+Configure connection pooling and timeouts for upstream API requests.
+
+<ParamField path="http.connect_timeout_ms" type="integer" default="5000">
+  Connection timeout in milliseconds. Minimum 1ms, defaults to 5000 if set to 0.
+</ParamField>
+
+<ParamField path="http.request_timeout_ms" type="integer" default="0">
+  Total request timeout in milliseconds. 0 disables timeout (recommended for streaming).
+</ParamField>
+
+<ParamField path="http.pool_idle_timeout_secs" type="integer" default="90">
+  How long to keep idle connections in the pool before closing them
+</ParamField>
+
+<ParamField path="http.pool_max_idle_per_host" type="integer" default="16">
+  Global default for maximum idle connections per upstream host
+</ParamField>
+
+<ParamField path="http.upstream_pool_max_idle_per_host" type="map[string, integer]">
+  Per-upstream connection pool size overrides. Keys can be:
+  - `openai`
+  - `anthropic`
+  - `binance`
+  - `custom.<name>` (e.g., `custom.github`)
+
+  ```toml
+  [http.upstream_pool_max_idle_per_host]
+  openai = 32
+  anthropic = 24
+  binance = 12
+  "custom.github" = 8
+  ```
+</ParamField>
+
+## Dashboard Configuration
+
+<ParamField path="dashboard.spend_history_days" type="integer" default="30">
+  Number of days of spend history to display in the dashboard
+</ParamField>
+
+## Alert Configuration
+
+Control which events trigger alerts and how long they're retained.
+
+<ParamField path="alerts.prompt_drift" type="boolean" default="true">
+  Alert when prompt drift is detected
+</ParamField>
+
+<ParamField path="alerts.prompt_size" type="boolean" default="true">
+  Alert when prompts exceed size limits
+</ParamField>
+
+<ParamField path="alerts.budget_warning" type="boolean" default="true">
+  Alert when reaching budget warning threshold
+</ParamField>
+
+<ParamField path="alerts.budget_exceeded" type="boolean" default="true">
+  Alert when daily budget is exceeded
+</ParamField>
+
+<ParamField path="alerts.onchain_denied" type="boolean" default="true">
+  Alert when on-chain transactions are denied
+</ParamField>
+
+<ParamField path="alerts.rate_limit_hit" type="boolean" default="true">
+  Alert when rate limits are triggered
+</ParamField>
+
+<ParamField path="alerts.anomalous_volume" type="boolean" default="true">
+  Alert on unusual request volume spikes
+</ParamField>
+
+<ParamField path="alerts.new_endpoint" type="boolean" default="true">
+  Alert when a new API endpoint is accessed for the first time
+</ParamField>
+
+<ParamField path="alerts.time_anomaly" type="boolean" default="true">
+  Alert on requests at unusual times
+</ParamField>
+
+<ParamField path="alerts.high_severity_denied_action" type="boolean" default="true">
+  Alert when high-severity actions (withdrawals, destructive operations) are blocked
+</ParamField>
+
+<ParamField path="alerts.retention_days" type="integer" default="30">
+  Number of days to retain alert records in the database
+</ParamField>
+
+## Binance Configuration
+
+See [Binance Configuration](/config/binance) for detailed documentation.
+
+<ParamField path="binance.enabled" type="boolean" default="false">
+  Enable the Binance trading proxy
+</ParamField>
+
+<ParamField path="binance.base_url" type="string" default="https://api.binance.com">
+  Binance API base URL. Can be changed for testnet.
+</ParamField>
+
+<ParamField path="binance.max_order_value_usd" type="float" default="500.0">
+  Maximum USD value per order
+</ParamField>
+
+<ParamField path="binance.daily_volume_cap_usd" type="float" default="2500.0">
+  Daily trading volume limit in USD
+</ParamField>
+
+<ParamField path="binance.allow_delete_open_orders" type="boolean" default="false">
+  Allow `DELETE /api/v3/openOrders` (cancels all open orders). Blocked by default.
+</ParamField>
+
+<ParamField path="binance.recv_window_ms" type="integer" default="5000">
+  Binance recvWindow parameter for request validity. Must be ≤ 60000ms.
+</ParamField>
+
+## Custom Services Configuration
+
+See [Custom Services](/config/custom-services) for detailed documentation.
+
+<ParamField path="custom.<name>" type="object">
+  Define custom API proxies. `<name>` can be any identifier (e.g., `github`, `stripe`).
+
+  ```toml
+  [custom.github]
+  base_url = "https://api.github.com"
+  auth_header = "Authorization"
+  auth_value_prefix = "Bearer "
+  auth_value_env = "GITHUB_TOKEN"
+  blocked_endpoints = ["DELETE /repos/**"]
+  rate_limit = 100
+  rate_limit_window_seconds = 3600
+  ```
+</ParamField>
+
+## On-Chain Configuration
+
+Configure transaction limits and smart contract permissions.
+
+<ParamField path="onchain.enabled" type="boolean" default="false">
+  Enable on-chain transaction proxying and policy enforcement
+</ParamField>
+
+<ParamField path="onchain.chain_ids" type="array[integer]">
+  Allowed blockchain chain IDs (e.g., `[1, 137, 42161]` for Ethereum, Polygon, Arbitrum)
+</ParamField>
+
+<ParamField path="onchain.limits.max_tx_value_usd" type="float" default="100.0">
+  Maximum USD value per transaction
+</ParamField>
+
+<ParamField path="onchain.limits.daily_spend_cap_usd" type="float" default="500.0">
+  Daily spending limit in USD for on-chain transactions
+</ParamField>
+
+<ParamField path="onchain.limits.cooldown_seconds" type="integer" default="30">
+  Minimum seconds between transactions
+</ParamField>
+
+<ParamField path="onchain.limits.max_slippage_bps" type="integer" default="50">
+  Maximum allowed slippage in basis points (50 = 0.5%)
+</ParamField>
+
+<ParamField path="onchain.limits.max_leverage" type="integer" default="5">
+  Maximum leverage multiplier for leveraged positions
+</ParamField>
+
+<ParamField path="onchain.permits.expiry_seconds" type="integer" default="300">
+  How long signed permits remain valid (5 minutes default)
+</ParamField>
+
+<ParamField path="onchain.permits.require_policy_hash" type="boolean" default="true">
+  Require permit signatures to include policy version hash
+</ParamField>
+
+<ParamField path="onchain.permits.verifying_contract" type="string">
+  Address of the permit verifying contract
+</ParamField>
+
+<ParamField path="onchain.whitelist" type="map[string, array[string]]">
+  Whitelisted addresses per chain ID
+
+  ```toml
+  [onchain.whitelist]
+  "1" = ["0x1234...", "0x5678..."]
+  "137" = ["0xabcd..."]
+  ```
+</ParamField>
+
+## Example Configuration
+
+```toml
+# LLM spend tracking and rate limiting
+[llm]
+track_spend = true
+daily_budget_usd = 50.0
+budget_warning_pct = 80
+rate_limit_per_minute = 100
+allowed_models = ["gpt-4o", "claude-sonnet"]
+
+[llm.prompt_drift]
+enabled = true
+mode = "alert"
+ignore_whitespace = true
+
+[llm.prompt_size_guard]
+enabled = true
+max_prompt_tokens = 50000
+action = "deny"
+
+[llm.model_pricing.gpt-4o]
+input_per_million_usd = 2.50
+output_per_million_usd = 10.0
+
+# HTTP client configuration
+[http]
+connect_timeout_ms = 5000
+request_timeout_ms = 0
+pool_idle_timeout_secs = 90
+pool_max_idle_per_host = 16
+
+[http.upstream_pool_max_idle_per_host]
+openai = 32
+anthropic = 24
+
+# Binance trading limits
+[binance]
+enabled = true
+base_url = "https://api.binance.com"
+max_order_value_usd = 100.0
+daily_volume_cap_usd = 200.0
+allow_delete_open_orders = false
+recv_window_ms = 5000
+
+# Custom GitHub proxy
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"
+blocked_endpoints = [
+  "DELETE /repos/**",
+  "DELETE /orgs/**",
+]
+rate_limit = 100
+rate_limit_window_seconds = 3600
+
+# Alerts
+[alerts]
+prompt_drift = true
+budget_warning = true
+budget_exceeded = true
+rate_limit_hit = true
+retention_days = 30
+
+# Dashboard
+[dashboard]
+spend_history_days = 60
+```

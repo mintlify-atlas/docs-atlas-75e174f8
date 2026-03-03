@@ -1,122 +1,198 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Fishnet",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#0EA5E9",
+    "light": "#38BDF8",
+    "dark": "#0284C7"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/iamyxsh/fishnet"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/iamyxsh/fishnet",
+      "x": "https://twitter.com/FishnetDev"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/credential-vault",
+              "concepts/spend-limits",
+              "concepts/rate-limiting",
+              "concepts/audit-trail"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Security Features",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "security/prompt-drift-detection",
+              "security/endpoint-blocking",
+              "security/onchain-permits",
+              "security/zk-proofs"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Configuration",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "config/fishnet-toml",
+              "config/llm-providers",
+              "config/binance",
+              "config/custom-services"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/running-fishnet",
+              "operations/dashboard",
+              "operations/alerts-webhooks",
+              "operations/backup-restore"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/openclaw",
+              "integrations/langchain",
+              "integrations/crewai"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "CLI Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Commands",
             "pages": [
-              "api-reference/introduction"
+              "cli/fishnet-start",
+              "cli/fishnet-stop",
+              "cli/fishnet-init",
+              "cli/fishnet-status",
+              "cli/fishnet-doctor",
+              "cli/fishnet-add-key",
+              "cli/fishnet-list-keys",
+              "cli/fishnet-remove-key",
+              "cli/fishnet-backup",
+              "cli/fishnet-restore",
+              "cli/fishnet-policy",
+              "cli/fishnet-service",
+              "cli/fishnet-firewall",
+              "cli/fishnet-audit"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/auth/status",
+              "api/auth/setup",
+              "api/auth/login",
+              "api/auth/logout"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "System",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/system/status",
+              "api/system/policies"
+            ]
+          },
+          {
+            "group": "Alerts",
+            "pages": [
+              "api/alerts/list",
+              "api/alerts/dismiss",
+              "api/alerts/config",
+              "api/alerts/webhooks"
+            ]
+          },
+          {
+            "group": "Spend Tracking",
+            "pages": [
+              "api/spend/get-spend",
+              "api/spend/budgets"
+            ]
+          },
+          {
+            "group": "Credentials",
+            "pages": [
+              "api/credentials/list",
+              "api/credentials/create",
+              "api/credentials/delete"
+            ]
+          },
+          {
+            "group": "Onchain",
+            "pages": [
+              "api/onchain/config",
+              "api/onchain/stats",
+              "api/onchain/permits",
+              "api/onchain/submit"
+            ]
+          },
+          {
+            "group": "Audit Log",
+            "pages": [
+              "api/audit/list",
+              "api/audit/export"
+            ]
+          },
+          {
+            "group": "Proxy Endpoints",
+            "pages": [
+              "api/proxy/openai",
+              "api/proxy/anthropic",
+              "api/proxy/binance",
+              "api/proxy/custom"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Smart Contracts",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "contracts/introduction",
+              "contracts/fishnet-wallet"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "contracts/deployment",
+              "contracts/eip712-permits",
+              "contracts/testing"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

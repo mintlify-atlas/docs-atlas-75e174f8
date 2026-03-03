@@ -1,0 +1,141 @@
+---
+title: fishnet doctor
+description: Validate local Fishnet and agent environment
+---
+
+## Synopsis
+
+```bash
+fishnet doctor [--json]
+```
+
+Runs diagnostic checks on your Fishnet installation and AI agent environment. Validates that the server is running, credentials are configured, environment variables are set correctly, and upstream APIs are reachable.
+
+## Arguments
+
+<ParamField path="--json" type="boolean" default="false">
+  Output results in JSON format instead of human-readable text.
+</ParamField>
+
+## Examples
+
+### Run diagnostic checks (text output)
+
+```bash
+fishnet doctor
+```
+
+**Output:**
+```
+Fishnet doctor report:
+  [PASS] fishnet_running       process appears to be running
+  [PASS] credentials_present   3 credential(s) in vault
+  [PASS] openai_base_url       OPENAI_BASE_URL=http://127.0.0.1:3777/proxy/openai
+  [PASS] anthropic_base_url    ANTHROPIC_BASE_URL=http://127.0.0.1:3777/proxy/anthropic
+  [PASS] upstream_reachable    openai reachable (status 200 OK)
+```
+
+### Run diagnostic checks (JSON output)
+
+```bash
+fishnet doctor --json
+```
+
+**Output:**
+```json
+{
+  "ok": true,
+  "failed": 0,
+  "checks": [
+    {
+      "check": "fishnet_running",
+      "ok": true,
+      "detail": "process appears to be running"
+    },
+    {
+      "check": "credentials_present",
+      "ok": true,
+      "detail": "3 credential(s) in vault"
+    },
+    {
+      "check": "openai_base_url",
+      "ok": true,
+      "detail": "OPENAI_BASE_URL=http://127.0.0.1:3777/proxy/openai"
+    },
+    {
+      "check": "anthropic_base_url",
+      "ok": true,
+      "detail": "ANTHROPIC_BASE_URL=http://127.0.0.1:3777/proxy/anthropic"
+    },
+    {
+      "check": "upstream_reachable",
+      "ok": true,
+      "detail": "openai reachable (status 200 OK)"
+    }
+  ]
+}
+```
+
+### Example with failures
+
+```bash
+fishnet doctor
+```
+
+**Output:**
+```
+Fishnet doctor report:
+  [FAIL] fishnet_running       no active fishnet pid detected
+  [PASS] credentials_present   3 credential(s) in vault
+  [FAIL] openai_base_url       OPENAI_BASE_URL is not set
+  [FAIL] anthropic_base_url    ANTHROPIC_BASE_URL is not set
+  [FAIL] upstream_reachable    failed to reach api.openai.com: connection timeout
+[fishnet] doctor found 4 failing check(s)
+```
+
+## Diagnostic checks
+
+### fishnet_running
+Verifies that the Fishnet server process is running by checking the PID file.
+
+**Pass:** Process appears to be running  
+**Fail:** No active fishnet pid detected
+
+### credentials_present
+Checks that the credential vault can be unlocked and contains at least one API key.
+
+**Pass:** N credential(s) in vault  
+**Fail:** Failed to unlock vault: `<error>` or failed to list credentials: `<error>`
+
+### openai_base_url
+Validates that `OPENAI_BASE_URL` environment variable is set and points to the local Fishnet proxy.
+
+**Pass:** OPENAI_BASE_URL=http://127.0.0.1:3777/proxy/openai  
+**Fail:** OPENAI_BASE_URL is not set
+
+Expected format: `http://localhost:PORT/proxy/openai` or `http://127.0.0.1:PORT/proxy/openai`
+
+### anthropic_base_url
+Validates that `ANTHROPIC_BASE_URL` environment variable is set and points to the local Fishnet proxy.
+
+**Pass:** ANTHROPIC_BASE_URL=http://127.0.0.1:3777/proxy/anthropic  
+**Fail:** ANTHROPIC_BASE_URL is not set
+
+Expected format: `http://localhost:PORT/proxy/anthropic` or `http://127.0.0.1:PORT/proxy/anthropic`
+
+### upstream_reachable
+Tests connectivity to upstream API providers (api.openai.com) with a 5-second timeout.
+
+**Pass:** openai reachable (status 200 OK)  
+**Fail:** Failed to reach api.openai.com: `<error>`
+
+## Exit codes
+
+- **0** - All checks passed
+- **1** - One or more checks failed
+
+## Related commands
+
+- [fishnet status](/cli/fishnet-status) - Check server runtime status
+- [fishnet start](/cli/fishnet-start) - Start the server if not running
+- [fishnet list-keys](/cli/fishnet-list-keys) - List credentials in the vault

@@ -1,0 +1,563 @@
+---
+title: Testing Guide
+description: Run the full test suite, including EIP-712 compatibility tests
+---
+
+## Overview
+
+Fishnet includes a comprehensive test suite with 100+ tests covering:
+
+- **Core functionality**: Permit validation, execution, access control
+- **EIP-712 compatibility**: Rust ↔ Solidity encoding compatibility
+- **Edge cases**: Expiry boundaries, nonce ordering, reentrancy protection
+- **Attack surface**: Fuzzing, malicious inputs, signature malleability
+- **End-to-end flows**: Full integration tests with FFI to Rust signer
+
+## Quick Start
+
+Run all tests:
+
+```bash
+cd contracts
+forge test
+```
+
+Run with verbose output (show logs):
+
+```bash
+forge test -vvv
+```
+
+Run with full trace (debug failed tests):
+
+```bash
+forge test -vvvv
+```
+
+## Test Suites
+
+### 1. Core Functionality Tests
+
+**File**: `test/FishnetWallet.t.sol` (766 lines)
+
+**Coverage**: Constructor, `execute()`, `setSigner()`, `withdraw()`, `pause()`, `unpause()`
+
+Run core tests:
+
+```bash
+forge test --match-contract FishnetWalletTest -vv
+```
+
+**Key Tests**:
+
+<AccordionGroup>
+  <Accordion title="test_executeValidPermit">
+    Verifies a valid permit executes successfully, transfers ETH, marks nonce as used, and emits `ActionExecuted` event.
+    
+    ```solidity test/FishnetWallet.t.sol:153-177
+    function test_executeValidPermit() public {
+        bytes memory data = abi.encodeWithSelector(MockTarget.doSomething.selector, 42);
+        uint48 expiry = uint48(block.timestamp + 300);
+        bytes32 policyHash = keccak256("policy-v1");
+
+        FishnetPermit memory permit = _buildPermit(
+            address(target), 1 ether, data, 1, expiry, policyHash
+        );
+        bytes memory sig = _signPermit(permit, signerPrivateKey);
+
+        wallet.execute(address(target), 1 ether, data, permit, sig);
+
+        assertEq(target.lastValue(), 42);
+        assertTrue(wallet.usedNonces(1));
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="test_execute_reverts_permitExpired">
+    Verifies expired permits are rejected.
+    
+    ```solidity test/FishnetWallet.t.sol:197-209
+    function test_execute_reverts_permitExpired() public {
+        uint48 expiry = uint48(block.timestamp - 1);
+        // ...
+        vm.expectRevert(FishnetWallet.PermitExpired.selector);
+        wallet.execute(address(target), 0, data, permit, sig);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="test_execute_reverts_nonceAlreadyUsed">
+    Verifies nonce replay protection.
+    
+    ```solidity test/FishnetWallet.t.sol:232-246
+    function test_execute_reverts_nonceAlreadyUsed() public {
+        wallet.execute(address(target), 0, data, permit, sig);  // First use
+        
+        vm.expectRevert(FishnetWallet.NonceUsed.selector);
+        wallet.execute(address(target), 0, data, permit, sig);  // Replay attempt
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="test_reentryProtection">
+    Verifies reentrancy attacks are prevented.
+    
+    ```solidity test/FishnetWallet.t.sol:632-661
+    function test_reentryProtection() public {
+        // Target tries to re-enter wallet.execute() with same nonce
+        // Inner call reverts (NonceUsed) → outer call reverts (ExecutionFailed)
+        vm.expectRevert(FishnetWallet.ExecutionFailed.selector);
+        wallet.execute(address(reentrant), 0, data, permit, sig);
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+Run a specific test:
+
+```bash
+forge test --match-test test_executeValidPermit -vvv
+```
+
+### 2. EIP-712 Compatibility Tests
+
+**File**: `test/EIP712Compatibility.t.sol` (303 lines)
+
+**Coverage**: Rust-Solidity encoding compatibility, domain separator, struct hash, signatures
+
+Run compatibility tests:
+
+```bash
+forge test --match-contract EIP712Compatibility -vvv
+```
+
+**Key Tests**:
+
+<AccordionGroup>
+  <Accordion title="test_permitTypehashMatchesSolidity">
+    Verifies the Rust typehash matches Solidity's `PERMIT_TYPEHASH`.
+    
+    ```solidity test/EIP712Compatibility.t.sol:36-51
+    function test_permitTypehashMatchesSolidity() public view {
+        bytes32 fromRawString = keccak256(
+            "FishnetPermit(address wallet,uint64 chainId,...)"
+        );
+        assertEq(fromRawString, EXPECTED_PERMIT_TYPEHASH);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="test_domainSeparatorEncoding">
+    Verifies Rust's manual domain separator construction matches Solidity's `DOMAIN_SEPARATOR()`.
+    
+    ```solidity test/EIP712Compatibility.t.sol:57-86
+    function test_domainSeparatorEncoding() public view {
+        bytes32 manualDomainSep = keccak256(
+            abi.encode(
+                domainTypeHash,
+                keccak256("Fishnet"),
+                keccak256("1"),
+                block.chainid,
+                address(wallet)
+            )
+        );
+        assertEq(manualDomainSep, wallet.DOMAIN_SEPARATOR());
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="test_structHashEncoding">
+    Verifies Rust's manual struct hash encoding matches Solidity's `abi.encode()`.
+    
+    This test is critical because it verifies that `uint64` and `uint48` padding is identical between Rust and Solidity.
+    
+    ```solidity test/EIP712Compatibility.t.sol:92-140
+    function test_structHashEncoding() public view {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                EXPECTED_PERMIT_TYPEHASH,
+                walletAddr,
+                chainId,    // uint64 → auto-padded to 32 bytes
+                nonce,
+                expiry,     // uint48 → auto-padded to 32 bytes
+                target,
+                value,
+                calldataHash,
+                policyHash
+            )
+        );
+        // Verify matches manual concatenation
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="test_rustSignerEndToEnd">
+    Full end-to-end test: compute digest → sign → execute.
+    
+    This mirrors the exact code path in `crates/server/src/signer.rs:eip712_hash()`.
+    
+    ```solidity test/EIP712Compatibility.t.sol:146-182
+    function test_rustSignerEndToEnd() public {
+        bytes32 digest = _computeDigest(...);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPrivateKey, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+        
+        wallet.execute(address(receiver), 0, callData, permit, signature);
+        
+        assertTrue(wallet.usedNonces(1));
+        assertEq(receiver.lastArg(), 123);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="test_abiEncodePaddingMatchesRust">
+    Verifies `abi.encode(uint64)` and `abi.encode(uint48)` produce left-padded 32-byte values identical to Rust's manual padding.
+    
+    ```solidity test/EIP712Compatibility.t.sol:264-290
+    function test_abiEncodePaddingMatchesRust() public pure {
+        uint64 chainId = 84532;
+        bytes memory encoded = abi.encode(chainId);
+        assertEq(encoded.length, 32);
+        
+        // First 24 bytes should be zero
+        for (uint256 i = 0; i < 24; i++) {
+            assertEq(uint8(encoded[i]), 0);
+        }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### 3. Fuzz Tests
+
+**File**: `test/FishnetWalletFuzz.t.sol` (10,691 bytes)
+
+**Coverage**: Random inputs, boundary values, gas usage
+
+Run fuzz tests:
+
+```bash
+forge test --match-contract FishnetWalletFuzz -vv
+```
+
+**Example Fuzz Test**:
+
+```solidity
+function testFuzz_executeWithRandomNonce(uint256 nonce) public {
+    vm.assume(nonce != 0);
+    // Build permit with random nonce
+    // Execute and verify nonce is marked used
+}
+```
+
+### 4. Attack Surface Tests
+
+**File**: `test/AttackSurface.t.sol` (18,072 bytes)
+
+**Coverage**: Malicious inputs, signature forgery, front-running
+
+Run attack surface tests:
+
+```bash
+forge test --match-contract AttackSurface -vv
+```
+
+### 5. End-to-End Integration Tests
+
+**File**: `test/FishnetWalletE2E.t.sol` (14,888 bytes)
+
+**Coverage**: Full deployment → fund → sign → execute flows
+
+Run E2E tests:
+
+```bash
+forge test --match-contract FishnetWalletE2E -vv
+```
+
+### 6. Rust Signer FFI Tests
+
+**File**: `test/RustSignerFFI.t.sol` (9,384 bytes)
+
+**Coverage**: FFI calls to Rust signer, cross-language compatibility
+
+These tests use Foundry's FFI to call the actual Rust signer implementation.
+
+Run FFI tests:
+
+```bash
+forge test --match-contract RustSignerFFI -vv
+```
+
+<Warning>
+  FFI tests require `ffi = true` in `foundry.toml`. This is enabled by default.
+</Warning>
+
+## Test Coverage
+
+Generate coverage report:
+
+```bash
+forge coverage
+```
+
+Generate detailed HTML coverage report:
+
+```bash
+forge coverage --report lcov
+genhtml lcov.info --branch-coverage --output-dir coverage
+```
+
+Open `coverage/index.html` in your browser.
+
+**Expected Coverage**: ~95%+ statement coverage, ~90%+ branch coverage
+
+## Gas Benchmarks
+
+Run gas benchmarks:
+
+```bash
+forge test --gas-report
+```
+
+**Example Output**:
+
+```
+| Function       | Min   | Avg    | Max    |
+|----------------|-------|--------|--------|
+| execute        | 85000 | 92000  | 110000 |
+| setSigner      | 28000 | 28000  | 28000  |
+| pause          | 24000 | 24000  | 24000  |
+```
+
+## Running Specific Test Categories
+
+<CodeGroup>
+```bash Core Tests
+forge test --match-contract FishnetWalletTest
+```
+
+```bash Compatibility Tests
+forge test --match-contract EIP712Compatibility
+```
+
+```bash Fuzz Tests
+forge test --match-contract Fuzz
+```
+
+```bash Attack Tests
+forge test --match-contract AttackSurface
+```
+
+```bash E2E Tests
+forge test --match-contract E2E
+```
+</CodeGroup>
+
+## Integration Test Script
+
+Run the full Anvil-based integration test:
+
+```bash
+bash scripts/sc3-integration-test.sh
+```
+
+This script:
+1. Starts a local Anvil node
+2. Deploys FishnetWallet
+3. Signs a permit using `cast`
+4. Executes the permit on-chain
+5. Verifies the transaction succeeded
+
+## Debugging Failed Tests
+
+### Verbose Logging
+
+Use `-vvv` for stack traces:
+
+```bash
+forge test --match-test test_executeValidPermit -vvv
+```
+
+Use `-vvvv` for full EVM traces:
+
+```bash
+forge test --match-test test_executeValidPermit -vvvv
+```
+
+### Isolate Failing Tests
+
+Run only tests matching a pattern:
+
+```bash
+forge test --match-test "test_execute_reverts"
+```
+
+### Enable Console Logs
+
+Add console logs to tests:
+
+```solidity
+import {console} from "forge-std/console.sol";
+
+function test_debug() public {
+    console.log("Nonce:", permit.nonce);
+    console.logBytes32(digest);
+    console.logAddress(recoveredSigner);
+}
+```
+
+Run with `-vv` to see logs:
+
+```bash
+forge test --match-test test_debug -vv
+```
+
+## Continuous Integration
+
+Add to your CI pipeline:
+
+```yaml .github/workflows/test.yml
+name: Test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Run tests
+        run: |
+          cd contracts
+          forge test -vvv
+      - name: Check coverage
+        run: |
+          cd contracts
+          forge coverage --report summary
+```
+
+## Test Utilities
+
+### Helper Functions
+
+The test suite includes reusable helpers:
+
+```solidity test/FishnetWallet.t.sol:77-121
+function _buildPermit(
+    address _target,
+    uint256 _value,
+    bytes memory _data,
+    uint256 _nonce,
+    uint48 _expiry,
+    bytes32 _policyHash
+) internal view returns (FishnetWallet.FishnetPermit memory) {
+    return FishnetWallet.FishnetPermit({
+        wallet: address(wallet),
+        chainId: uint64(block.chainid),
+        nonce: _nonce,
+        expiry: _expiry,
+        target: _target,
+        value: _value,
+        calldataHash: keccak256(_data),
+        policyHash: _policyHash
+    });
+}
+
+function _signPermit(
+    FishnetWallet.FishnetPermit memory permit,
+    uint256 privateKey
+) internal view returns (bytes memory) {
+    bytes32 structHash = keccak256(abi.encode(...));
+    bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+    (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+    return abi.encodePacked(r, s, v);
+}
+```
+
+### Mock Contracts
+
+The test suite includes mock targets:
+
+```solidity test/FishnetWallet.t.sol:7-46
+contract MockTarget {
+    uint256 public lastValue;
+    bool public shouldFail;
+
+    function doSomething(uint256 x) external payable {
+        require(!shouldFail, "mock revert");
+        lastValue = x;
+    }
+}
+
+contract ReentrantTarget {
+    // Tests reentrancy protection
+}
+
+contract AcceptAllTarget {
+    // Tests complex calldata
+}
+```
+
+## Expected Test Results
+
+All tests should pass:
+
+```
+[PASS] test_constructor_setsOwner() (gas: 8234)
+[PASS] test_constructor_setsSigner() (gas: 8456)
+[PASS] test_executeValidPermit() (gas: 95234)
+[PASS] test_execute_reverts_permitExpired() (gas: 23456)
+[PASS] test_permitTypehashMatchesSolidity() (gas: 5678)
+[PASS] test_domainSeparatorEncoding() (gas: 12345)
+[PASS] test_rustSignerEndToEnd() (gas: 98765)
+
+Test result: ok. 100 passed; 0 failed; 0 skipped; finished in 2.34s
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: FFI is disabled">
+    FFI tests require `ffi = true` in `foundry.toml`. This is already enabled in the Fishnet config.
+    
+    If you see this error, check `foundry.toml:5`:
+    
+    ```toml
+    ffi = true
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: Signature verification failed">
+    This usually indicates an EIP-712 encoding mismatch. Run the compatibility tests:
+    
+    ```bash
+    forge test --match-contract EIP712Compatibility -vvvv
+    ```
+    
+    Check the domain separator and struct hash computations.
+  </Accordion>
+  
+  <Accordion title="Gas limit exceeded">
+    Some complex tests may hit gas limits. Increase the gas limit in `foundry.toml` or use `vm.txGasPrice()`.
+  </Accordion>
+  
+  <Accordion title="Test takes too long">
+    Reduce fuzz runs:
+    
+    ```toml foundry.toml
+    [fuzz]
+    runs = 100  # Default is 256
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deploy Contracts" icon="rocket" href="/contracts/deployment">
+    Deploy FishnetWallet to testnets or mainnet
+  </Card>
+  <Card title="EIP-712 Permits" icon="signature" href="/contracts/eip712-permits">
+    Learn how permits are structured and signed
+  </Card>
+</CardGroup>

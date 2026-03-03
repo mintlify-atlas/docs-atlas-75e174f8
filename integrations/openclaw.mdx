@@ -1,0 +1,237 @@
+---
+title: "OpenClaw Integration"
+description: "Configure OpenClaw to route AI requests through Fishnet's security proxy"
+icon: "shield-check"
+---
+
+Integrate OpenClaw with Fishnet to add credential isolation, spend caps, and audit logging to your AI agents.
+
+## How It Works
+
+Fishnet sits between OpenClaw and AI providers (OpenAI, Anthropic). When you configure OpenClaw to use Fishnet's proxy endpoints:
+
+1. OpenClaw sends requests to `localhost:8473` instead of directly to OpenAI/Anthropic
+2. Fishnet intercepts the request and applies security policies
+3. Fishnet injects real credentials from its encrypted vault
+4. The request is forwarded to the upstream provider
+5. All actions are logged in Fishnet's tamper-proof audit trail
+
+Your agent never sees the real API keys. Every request flows through Fishnet's guardrails.
+
+## Prerequisites
+
+- Fishnet running locally on port `8473` (see [Installation](/installation))
+- API keys stored in Fishnet's credential vault
+- OpenClaw installed
+
+## Setup
+
+<Steps>
+  <Step title="Store your API keys in Fishnet">
+    Add your OpenAI and Anthropic credentials to Fishnet's encrypted vault:
+
+    ```bash
+    # Add OpenAI key
+    fishnet add-key openai sk-...
+
+    # Add Anthropic key
+    fishnet add-key anthropic sk-ant-...
+    ```
+
+    <Note>
+      These keys are encrypted and never exposed to your agent. Fishnet injects them at the proxy layer.
+    </Note>
+  </Step>
+
+  <Step title="Configure OpenClaw environment variables">
+    Set the base URLs to point to Fishnet's proxy endpoints:
+
+    <CodeGroup>
+    ```bash .env
+    # Point OpenClaw to Fishnet proxy
+    OPENAI_BASE_URL=http://localhost:8473/proxy/openai
+    ANTHROPIC_BASE_URL=http://localhost:8473/proxy/anthropic
+
+    # Leave API keys empty - Fishnet handles authentication
+    OPENAI_API_KEY=placeholder
+    ANTHROPIC_API_KEY=placeholder
+    ```
+
+    ```bash Shell
+    export OPENAI_BASE_URL="http://localhost:8473/proxy/openai"
+    export ANTHROPIC_BASE_URL="http://localhost:8473/proxy/anthropic"
+    export OPENAI_API_KEY="placeholder"
+    export ANTHROPIC_API_KEY="placeholder"
+    ```
+    </CodeGroup>
+
+    <Warning>
+      The API key environment variables must be set (use any placeholder value), but Fishnet ignores them and uses vault credentials instead.
+    </Warning>
+  </Step>
+
+  <Step title="Run OpenClaw">
+    Launch OpenClaw normally. All AI requests will now route through Fishnet:
+
+    ```bash
+    openclaw start
+    ```
+  </Step>
+
+  <Step title="Verify requests are proxied">
+    Check Fishnet's dashboard or logs to confirm requests are flowing through:
+
+    ```bash
+    # View live audit log
+    fishnet audit --tail
+
+    # Or open the dashboard
+    open http://localhost:8473
+    ```
+
+    You should see entries for `POST /v1/chat/completions` or `/v1/messages`.
+  </Step>
+</Steps>
+
+## Security Features
+
+Once integrated, Fishnet automatically enforces:
+
+### Credential Isolation
+
+OpenClaw never sees your real API keys. Even if an agent is compromised, credentials remain isolated in Fishnet's vault.
+
+### Spend Caps
+
+Set daily budgets in `fishnet.toml`:
+
+```toml
+[llm]
+daily_budget_usd = 50.0
+budget_warning_pct = 80
+```
+
+When the budget is hit, Fishnet blocks further requests. No runaway costs.
+
+### Rate Limiting
+
+Prevent request floods:
+
+```toml
+[llm]
+rate_limit_per_minute = 60
+```
+
+### Prompt Drift Detection
+
+Fishnet watches for unexpected changes in system prompts:
+
+```toml
+[llm.prompt_drift]
+enabled = true
+max_deviation_pct = 15.0
+```
+
+If a prompt drifts beyond the threshold, the request is blocked and an alert is fired.
+
+### Audit Trail
+
+Every approved and denied action is logged in a Merkle tree. Optionally generate ZK proofs for compliance attestation.
+
+## Example Configuration
+
+Complete `fishnet.toml` for OpenClaw:
+
+```toml
+[llm]
+track_spend = true
+daily_budget_usd = 100.0
+budget_warning_pct = 80
+rate_limit_per_minute = 120
+allowed_models = ["gpt-4", "gpt-4-turbo", "claude-3-5-sonnet-20241022"]
+
+[llm.prompt_drift]
+enabled = true
+baseline_source = "auto"
+max_deviation_pct = 20.0
+
+[llm.prompt_size_guard]
+enabled = true
+max_chars = 100000
+
+[alerts]
+budget_warning = true
+budget_exceeded = true
+prompt_drift = true
+rate_limit_hit = true
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="OpenClaw can't connect to Fishnet" icon="circle-exclamation">
+    Verify Fishnet is running:
+
+    ```bash
+    fishnet status
+    ```
+
+    Check the proxy is listening on port 8473:
+
+    ```bash
+    curl http://localhost:8473/api/v1/status
+    ```
+
+    If Fishnet isn't running, start it:
+
+    ```bash
+    fishnet start
+    ```
+  </Accordion>
+
+  <Accordion title="401 Unauthorized errors" icon="lock">
+    Fishnet couldn't find credentials for the provider. Verify they're stored:
+
+    ```bash
+    fishnet list-keys
+    ```
+
+    Add missing credentials:
+
+    ```bash
+    fishnet add-key <provider> <api-key>
+    ```
+  </Accordion>
+
+  <Accordion title="Requests are slow" icon="clock">
+    Fishnet adds minimal latency (typically less than 10ms). If requests are slow:
+
+    1. Check your upstream provider's status
+    2. Verify you're not hitting rate limits
+    3. Review Fishnet logs for errors:
+
+    ```bash
+    tail -f /var/lib/fishnet/logs/fishnet.log
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure Spend Limits" icon="wallet" href="/concepts/spend-limits">
+    Set daily budgets and prevent runaway costs
+  </Card>
+
+  <Card title="Block Endpoints" icon="ban" href="/security/endpoint-blocking">
+    Prevent your agent from accessing dangerous APIs
+  </Card>
+
+  <Card title="Alerts & Webhooks" icon="bell" href="/operations/alerts-webhooks">
+    Get notified when policies are violated
+  </Card>
+
+  <Card title="Audit Trail" icon="clipboard-list" href="/concepts/audit-trail">
+    Review and export all agent actions
+  </Card>
+</CardGroup>

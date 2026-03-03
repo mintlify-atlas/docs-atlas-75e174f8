@@ -1,0 +1,95 @@
+---
+title: "Get Onchain Stats"
+api: "GET /api/onchain/stats"
+---
+
+Retrieves aggregated statistics about onchain permit activity.
+
+## Authentication
+
+Requires a valid session token in the `Authorization` header:
+
+```
+Authorization: Bearer <session_token>
+```
+
+## Response
+
+<ResponseField name="total_permits_signed" type="integer">
+  Total number of approved permits signed
+</ResponseField>
+
+<ResponseField name="total_permits_denied" type="integer">
+  Total number of denied permit requests
+</ResponseField>
+
+<ResponseField name="spent_today_usd" type="number">
+  Total value spent today in USD (resets daily at midnight UTC)
+</ResponseField>
+
+<ResponseField name="last_permit_at" type="integer | null">
+  Unix timestamp of the last permit request, or `null` if no permits have been requested
+</ResponseField>
+
+<ResponseExample>
+```json
+{
+  "total_permits_signed": 42,
+  "total_permits_denied": 3,
+  "spent_today_usd": 1250.50,
+  "last_permit_at": 1700000000
+}
+```
+</ResponseExample>
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message
+</ResponseField>
+
+### Status Codes
+
+- `200` - Success
+- `401` - Unauthorized (missing or invalid session token)
+- `500` - Database error
+
+## Examples
+
+<CodeGroup>
+```bash cURL
+curl https://localhost:3978/api/onchain/stats \
+  -H "Authorization: Bearer fn_sess_abc123..."
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "https://localhost:3978/api/onchain/stats",
+    headers={"Authorization": "Bearer fn_sess_abc123..."}
+)
+
+stats = response.json()
+print(f"Signed: {stats['total_permits_signed']}")
+print(f"Denied: {stats['total_permits_denied']}")
+print(f"Spent today: ${stats['spent_today_usd']:.2f}")
+```
+
+```javascript JavaScript
+const response = await fetch('https://localhost:3978/api/onchain/stats', {
+  headers: { 'Authorization': 'Bearer fn_sess_abc123...' }
+});
+
+const stats = await response.json();
+console.log(`Signed: ${stats.total_permits_signed}`);
+console.log(`Denied: ${stats.total_permits_denied}`);
+console.log(`Spent today: $${stats.spent_today_usd.toFixed(2)}`);
+```
+</CodeGroup>
+
+## Implementation Notes
+
+- `spent_today_usd` is calculated from all approved permits with `status = 'approved'` since midnight UTC
+- Stats are derived from the `permits` table in the spend tracking database
+- The daily spend counter is used for enforcing the `daily_spend_cap_usd` limit

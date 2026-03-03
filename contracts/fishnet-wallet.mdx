@@ -1,0 +1,403 @@
+---
+title: FishnetWallet Contract API
+description: Complete reference for the FishnetWallet smart contract
+---
+
+## Contract Overview
+
+The `FishnetWallet` contract is a permit-gated smart wallet that executes on-chain actions authorized by EIP-712 signed permits.
+
+**Source**: `contracts/src/FishnetWallet.sol`
+
+**License**: MIT
+
+**Solidity Version**: `^0.8.19`
+
+## State Variables
+
+### Public State
+
+<ParamField path="owner" type="address">
+  Wallet owner. Can update signer, pause/unpause, and withdraw funds.
+</ParamField>
+
+<ParamField path="paused" type="bool">
+  Pause status. When `true`, all `execute()` calls revert.
+</ParamField>
+
+<ParamField path="fishnetSigner" type="address">
+  Address authorized to sign permits. Signatures are verified against this address.
+</ParamField>
+
+<ParamField path="usedNonces" type="mapping(uint256 => bool)">
+  Tracks used nonces to prevent replay attacks. Each nonce can only be used once.
+</ParamField>
+
+### Immutable State
+
+<ParamField path="_CACHED_DOMAIN_SEPARATOR" type="bytes32" private>
+  Cached EIP-712 domain separator for the original chain ID.
+</ParamField>
+
+<ParamField path="_CACHED_CHAIN_ID" type="uint256" private>
+  Original chain ID at deployment. Used to detect forks.
+</ParamField>
+
+### Constants
+
+```solidity FishnetWallet.sol:29-33
+bytes32 internal constant PERMIT_TYPEHASH = keccak256(
+    "FishnetPermit(address wallet,uint64 chainId,uint256 nonce,"
+    "uint48 expiry,address target,uint256 value,"
+    "bytes32 calldataHash,bytes32 policyHash)"
+);
+```
+
+The permit typehash defines the EIP-712 structure. Note the use of `uint64 chainId` and `uint48 expiry` instead of `uint256`.
+
+## Structs
+
+### FishnetPermit
+
+```solidity FishnetWallet.sol:35-44
+struct FishnetPermit {
+    address wallet;      // This wallet's address
+    uint64  chainId;     // Target chain ID
+    uint256 nonce;       // Unique nonce
+    uint48  expiry;      // Expiration timestamp
+    address target;      // Contract to call
+    uint256 value;       // ETH to send
+    bytes32 calldataHash;// keccak256 of calldata
+    bytes32 policyHash;  // Policy identifier
+}
+```
+
+<ParamField path="wallet" type="address" required>
+  Must match `address(this)`. Prevents permit reuse across wallets.
+</ParamField>
+
+<ParamField path="chainId" type="uint64" required>
+  Must match `block.chainid`. Prevents cross-chain replay attacks.
+</ParamField>
+
+<ParamField path="nonce" type="uint256" required>
+  Unique identifier. Can be any unused value (not necessarily sequential).
+</ParamField>
+
+<ParamField path="expiry" type="uint48" required>
+  UNIX timestamp. Permit reverts if `block.timestamp > expiry`.
+</ParamField>
+
+<ParamField path="target" type="address" required>
+  The contract that will receive the call. Must match the `target` parameter in `execute()`.
+</ParamField>
+
+<ParamField path="value" type="uint256" required>
+  Amount of ETH to send. Must match the `value` parameter in `execute()`.
+</ParamField>
+
+<ParamField path="calldataHash" type="bytes32" required>
+  `keccak256(data)` where `data` is the calldata. Must match `keccak256(data)` in `execute()`.
+</ParamField>
+
+<ParamField path="policyHash" type="bytes32" required>
+  Identifier for the policy that approved this action. Emitted in events for audit trails.
+</ParamField>
+
+## Constructor
+
+```solidity FishnetWallet.sol:62-69
+constructor(address _fishnetSigner) {
+    if (_fishnetSigner == address(0)) revert ZeroAddress();
+    owner = msg.sender;
+    fishnetSigner = _fishnetSigner;
+
+    _CACHED_CHAIN_ID = block.chainid;
+    _CACHED_DOMAIN_SEPARATOR = _computeDomainSeparator();
+}
+```
+
+<ParamField path="_fishnetSigner" type="address" required>
+  Address of the backend signer. Reverts if `address(0)`.
+</ParamField>
+
+**Effects**:
+- Sets `msg.sender` as owner
+- Caches the domain separator for the deployment chain
+
+## Core Functions
+
+### execute
+
+```solidity FishnetWallet.sol:90-112
+function execute(
+    address target,
+    uint256 value,
+    bytes calldata data,
+    FishnetPermit calldata permit,
+    bytes calldata signature
+) external whenNotPaused
+```
+
+Executes an on-chain action if a valid permit and signature are provided.
+
+<ParamField path="target" type="address" required>
+  Contract to call. Must match `permit.target`.
+</ParamField>
+
+<ParamField path="value" type="uint256" required>
+  ETH to send (in wei). Must match `permit.value`.
+</ParamField>
+
+<ParamField path="data" type="bytes" required>
+  Calldata to pass to `target`. `keccak256(data)` must match `permit.calldataHash`.
+</ParamField>
+
+<ParamField path="permit" type="FishnetPermit" required>
+  The signed permit structure.
+</ParamField>
+
+<ParamField path="signature" type="bytes" required>
+  65-byte ECDSA signature in `r || s || v` format.
+</ParamField>
+
+**Validation Checks** (in order):
+
+1. `block.timestamp <= permit.expiry` → reverts `PermitExpired()`
+2. `permit.chainId == block.chainid` → reverts `WrongChain()`
+3. `!usedNonces[permit.nonce]` → reverts `NonceUsed()`
+4. `permit.target == target` → reverts `TargetMismatch()`
+5. `permit.value == value` → reverts `ValueMismatch()`
+6. `permit.calldataHash == keccak256(data)` → reverts `CalldataMismatch()`
+7. `permit.wallet == address(this)` → reverts `WalletMismatch()`
+8. `_verifySignature(permit, signature)` → reverts `InvalidSignature()`
+
+**Effects**:
+- Marks nonce as used: `usedNonces[permit.nonce] = true`
+- Calls `target.call{value: value}(data)`
+- Emits `ActionExecuted(target, value, permit.nonce, permit.policyHash)`
+
+**Reverts**:
+- `WalletPaused()` if paused
+- `ExecutionFailed()` if the target call fails
+
+**Example**:
+
+```solidity
+// Swap 1 ETH for USDC on Uniswap
+bytes memory swapData = abi.encodeWithSelector(
+    ISwapRouter.exactInputSingle.selector,
+    SwapParams({
+        tokenIn: WETH,
+        tokenOut: USDC,
+        fee: 3000,
+        recipient: address(wallet),
+        deadline: block.timestamp + 300,
+        amountIn: 1 ether,
+        amountOutMinimum: 2000e6,
+        sqrtPriceLimitX96: 0
+    })
+);
+
+FishnetPermit memory permit = FishnetPermit({
+    wallet: address(wallet),
+    chainId: uint64(block.chainid),
+    nonce: 42,
+    expiry: uint48(block.timestamp + 600),
+    target: UNISWAP_ROUTER,
+    value: 0,
+    calldataHash: keccak256(swapData),
+    policyHash: keccak256("swap-policy-v1")
+});
+
+bytes memory signature = /* get from Fishnet backend */;
+
+wallet.execute(UNISWAP_ROUTER, 0, swapData, permit, signature);
+```
+
+### setSigner
+
+```solidity FishnetWallet.sol:152-157
+function setSigner(address _signer) external onlyOwner {
+    if (_signer == address(0)) revert ZeroAddress();
+    address oldSigner = fishnetSigner;
+    fishnetSigner = _signer;
+    emit SignerUpdated(oldSigner, _signer);
+}
+```
+
+Updates the authorized signer address.
+
+<ParamField path="_signer" type="address" required>
+  New signer address. Reverts if `address(0)`.
+</ParamField>
+
+**Restrictions**: Only callable by `owner`.
+
+**Effects**: Emits `SignerUpdated(oldSigner, newSigner)`.
+
+### withdraw
+
+```solidity FishnetWallet.sol:159-164
+function withdraw(address to) external onlyOwner {
+    uint256 balance = address(this).balance;
+    (bool success, ) = to.call{value: balance}("");
+    if (!success) revert WithdrawFailed();
+    emit Withdrawn(to, balance);
+}
+```
+
+Withdraws all ETH from the wallet.
+
+<ParamField path="to" type="address" required>
+  Recipient address.
+</ParamField>
+
+**Restrictions**: Only callable by `owner`.
+
+**Effects**: Transfers entire balance and emits `Withdrawn(to, amount)`.
+
+### pause
+
+```solidity FishnetWallet.sol:166-169
+function pause() external onlyOwner {
+    paused = true;
+    emit Paused(msg.sender);
+}
+```
+
+Pauses all `execute()` calls.
+
+**Restrictions**: Only callable by `owner`.
+
+**Effects**: Sets `paused = true` and emits `Paused(account)`.
+
+### unpause
+
+```solidity FishnetWallet.sol:171-174
+function unpause() external onlyOwner {
+    paused = false;
+    emit Unpaused(msg.sender);
+}
+```
+
+Resumes execution after a pause.
+
+**Restrictions**: Only callable by `owner`.
+
+**Effects**: Sets `paused = false` and emits `Unpaused(account)`.
+
+## View Functions
+
+### DOMAIN_SEPARATOR
+
+```solidity FishnetWallet.sol:71-76
+function DOMAIN_SEPARATOR() public view returns (bytes32) {
+    if (block.chainid == _CACHED_CHAIN_ID) {
+        return _CACHED_DOMAIN_SEPARATOR;
+    }
+    return _computeDomainSeparator();
+}
+```
+
+Returns the EIP-712 domain separator. Recomputes if chain ID has changed (e.g., after a fork).
+
+**Returns**: `bytes32` domain separator.
+
+## Events
+
+### ActionExecuted
+
+```solidity FishnetWallet.sol:46
+event ActionExecuted(address indexed target, uint256 value, uint256 nonce, bytes32 policyHash);
+```
+
+Emitted when a permit is successfully executed.
+
+<ResponseField name="target" type="address" indexed>
+  The contract that was called.
+</ResponseField>
+
+<ResponseField name="value" type="uint256">
+  Amount of ETH sent.
+</ResponseField>
+
+<ResponseField name="nonce" type="uint256">
+  Nonce of the executed permit.
+</ResponseField>
+
+<ResponseField name="policyHash" type="bytes32">
+  Policy that authorized this action.
+</ResponseField>
+
+### SignerUpdated
+
+```solidity FishnetWallet.sol:47
+event SignerUpdated(address indexed oldSigner, address indexed newSigner);
+```
+
+Emitted when the signer address is changed.
+
+### Paused / Unpaused
+
+```solidity FishnetWallet.sol:48-49
+event Paused(address account);
+event Unpaused(address account);
+```
+
+Emitted when the wallet is paused or unpaused.
+
+### Withdrawn
+
+```solidity FishnetWallet.sol:50
+event Withdrawn(address indexed to, uint256 amount);
+```
+
+Emitted when ETH is withdrawn.
+
+## Custom Errors
+
+```solidity FishnetWallet.sol:5-18
+error PermitExpired();         // block.timestamp > permit.expiry
+error WrongChain();            // permit.chainId != block.chainid
+error NonceUsed();             // Nonce already consumed
+error TargetMismatch();        // permit.target != target
+error ValueMismatch();         // permit.value != value
+error CalldataMismatch();      // permit.calldataHash != keccak256(data)
+error WalletMismatch();        // permit.wallet != address(this)
+error InvalidSignature();      // ecrecover didn't return fishnetSigner
+error InvalidSignatureLength();// signature.length != 65
+error ExecutionFailed();       // Target call reverted
+error NotOwner();              // msg.sender != owner
+error WalletPaused();          // paused == true
+error ZeroAddress();           // Attempted to set address(0)
+error WithdrawFailed();        // ETH transfer failed
+```
+
+All errors are custom errors (gas-efficient, descriptive).
+
+## Security Considerations
+
+<Warning>
+  **Nonce Management**: Nonces do NOT need to be sequential. The backend should generate random nonces to prevent front-running attacks.
+</Warning>
+
+<Warning>
+  **Expiry Bounds**: `expiry` is `uint48` (max value: 281474976710655, ~year 8921). Rust signer validates this range.
+</Warning>
+
+<Warning>
+  **Signature Malleability**: The contract does NOT check for signature malleability (high-s values). This is acceptable because each nonce can only be used once.
+</Warning>
+
+<Info>
+  **Reentrancy**: The contract marks nonces as used BEFORE making external calls, providing reentrancy protection.
+</Info>
+
+## Receive Function
+
+```solidity FishnetWallet.sol:176
+receive() external payable {}
+```
+
+The wallet can receive ETH directly.

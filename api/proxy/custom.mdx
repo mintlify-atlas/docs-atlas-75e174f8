@@ -1,0 +1,331 @@
+---
+title: Custom Service Proxy
+description: Proxy endpoint for custom HTTP APIs with configurable authentication and endpoint blocking
+---
+
+## ANY /custom/{name}/*
+
+Proxy requests to custom HTTP services with configurable authentication, endpoint blocking, and rate limiting. Ideal for GitHub API, Stripe, or any other HTTP API your agent needs.
+
+### Authentication
+
+Does **not** require session authentication. Uses credentials from the vault or environment variables.
+
+<Warning>
+  The proxy does not use session tokens. Configure credentials in the Fishnet vault or set environment variables as specified in the custom service configuration.
+</Warning>
+
+### Endpoint Format
+
+```
+GET /custom/{name}/{path}
+POST /custom/{name}/{path}
+DELETE /custom/{name}/{path}
+# Any HTTP method
+```
+
+The `{name}` must match a configured service in `[custom]` section of `fishnet.toml`.
+
+### Configuration
+
+Define custom services in `fishnet.toml`:
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "GITHUB_TOKEN"  # Fallback if vault credential not found
+blocked_endpoints = [
+    "DELETE /repos/*",
+    "DELETE /orgs/*",
+    "POST /orgs/*/repos/*/hooks/*/tests"  # Prevent webhook spam
+]
+rate_limit = 100
+rate_limit_window_seconds = 3600
+```
+
+<ParamField path="base_url" type="string" required>
+  Base URL of the upstream service (without trailing slash).
+</ParamField>
+
+<ParamField path="auth_header" type="string" default="">
+  HTTP header name for authentication (e.g., `Authorization`, `X-API-Key`).
+  Leave empty if no authentication is needed.
+</ParamField>
+
+<ParamField path="auth_value_prefix" type="string" default="">
+  Prefix for the auth header value (e.g., `Bearer `, `token `).
+</ParamField>
+
+<ParamField path="auth_value_env" type="string" default="">
+  Environment variable to read auth value from if vault credential is not found.
+</ParamField>
+
+<ParamField path="blocked_endpoints" type="array" default="[]">
+  List of endpoint patterns to block (e.g., `DELETE /repos/*`).
+  Supports wildcard matching with `*`.
+</ParamField>
+
+<ParamField path="rate_limit" type="integer" default="0">
+  Maximum requests per window. 0 = no limit.
+</ParamField>
+
+<ParamField path="rate_limit_window_seconds" type="integer" default="60">
+  Rate limit window in seconds.
+</ParamField>
+
+### Credential Resolution
+
+Fishnet resolves credentials in this order:
+
+1. **Vault credential**: Service `custom.{name}` (e.g., `custom.github`)
+2. **Environment variable**: Value from `auth_value_env`
+3. **Error**: If neither is found, request is denied
+
+<Info>
+  Vault credentials take precedence over environment variables. This allows you to rotate keys without restarting Fishnet.
+</Info>
+
+### Endpoint Blocking
+
+Blocked endpoint patterns use method + path matching:
+
+```toml
+blocked_endpoints = [
+    "DELETE /repos/*",           # Block all repo deletions
+    "DELETE /orgs/*/teams/*",    # Block team deletions
+    "POST /repos/*/hooks",       # Block webhook creation
+    "*"                          # Block all methods (use carefully)
+]
+```
+
+<Warning>
+  Blocked endpoints trigger a high-severity alert and are logged in the audit trail with `decision: denied`.
+</Warning>
+
+### Headers Forwarding
+
+All request headers are forwarded except:
+- `authorization` (replaced with vault credential if configured)
+- `x-api-key` (stripped)
+- Custom `auth_header` (replaced with vault credential)
+- `host`, `connection`, `keep-alive`, `transfer-encoding`, `content-length` (HTTP infrastructure)
+
+### Body Forwarding
+
+Request bodies are forwarded as-is to the upstream service. Fishnet does not parse or modify custom service request bodies.
+
+### Examples
+
+<CodeGroup>
+
+```bash curl (GitHub API)
+curl -X GET "http://localhost:3080/custom/github/repos/fishnetio/fishnet"
+```
+
+```bash curl (Create GitHub Issue)
+curl -X POST "http://localhost:3080/custom/github/repos/fishnetio/fishnet/issues" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Bug report from agent",
+    "body": "The agent encountered an error...",
+    "labels": ["bug", "agent"]
+  }'
+```
+
+```python Python (GitHub Bot)
+import requests
+
+# List repositories
+response = requests.get(
+    "http://localhost:3080/custom/github/users/octocat/repos"
+)
+repos = response.json()
+for repo in repos:
+    print(f"{repo['name']}: {repo['description']}")
+
+# Create an issue
+response = requests.post(
+    "http://localhost:3080/custom/github/repos/fishnetio/fishnet/issues",
+    json={
+        "title": "Automated report",
+        "body": "Agent detected anomaly in logs",
+        "labels": ["automated"]
+    }
+)
+
+if response.status_code == 201:
+    issue = response.json()
+    print(f"Issue created: {issue['html_url']}")
+else:
+    error = response.json()
+    print(f"Failed: {error['error']}")
+```
+
+```javascript JavaScript
+const response = await fetch(
+  "http://localhost:3080/custom/github/repos/fishnetio/fishnet"
+);
+const repo = await response.json();
+console.log(`${repo.name}: ${repo.stargazers_count} stars`);
+```
+
+</CodeGroup>
+
+### Stripe Example
+
+```toml
+[custom.stripe]
+base_url = "https://api.stripe.com"
+auth_header = "Authorization"
+auth_value_prefix = "Bearer "
+auth_value_env = "STRIPE_SECRET_KEY"
+blocked_endpoints = [
+    "POST /v1/transfers",        # Block money transfers
+    "POST /v1/payouts",          # Block payouts
+    "DELETE /v1/customers/*"     # Block customer deletion
+]
+rate_limit = 50
+rate_limit_window_seconds = 60
+```
+
+```bash
+curl -X GET "http://localhost:3080/custom/stripe/v1/customers/cus_123"
+```
+
+### Error Responses
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "invalid custom proxy path"}
+  ```
+  Path does not match `/custom/{name}/{path}` format.
+</ResponseField>
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "unknown custom service: myapi"}
+  ```
+  Service `[custom.myapi]` is not configured in `fishnet.toml`.
+</ResponseField>
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "custom service github has empty base_url"}
+  ```
+  `base_url` is required in service configuration.
+</ResponseField>
+
+<ResponseField name="400 Bad Request" type="object">
+  ```json
+  {"error": "credential not found for custom service: github; configure vault credential or custom.github.auth_value_env"}
+  ```
+  Neither vault credential nor environment variable is configured.
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="object">
+  ```json
+  {"error": "endpoint blocked by custom policy"}
+  ```
+  Request matches a pattern in `blocked_endpoints`.
+</ResponseField>
+
+<ResponseField name="429 Too Many Requests" type="object">
+  ```json
+  {
+    "error": "rate limit exceeded, retry after 42s",
+    "retry_after_seconds": 42
+  }
+  ```
+  Rate limit exceeded (configured in `rate_limit` and `rate_limit_window_seconds`).
+</ResponseField>
+
+<ResponseField name="502 Bad Gateway" type="object">
+  ```json
+  {"error": "upstream provider is unavailable"}
+  ```
+  Failed to connect to the custom service.
+</ResponseField>
+
+### Audit Log Entry
+
+Each proxied request creates an audit log entry:
+
+```json
+{
+  "id": 45,
+  "timestamp": 1709510415000,
+  "intent_type": "api_call",
+  "service": "github",
+  "action": "POST /repos/fishnetio/fishnet/issues",
+  "decision": "approved",
+  "reason": null,
+  "cost_usd": null,
+  "policy_version_hash": "c3d4e5...",
+  "intent_hash": "456789...",
+  "permit_hash": null,
+  "merkle_root": "cba987..."
+}
+```
+
+Retrieve via `GET /api/audit?service=github`.
+
+### Credential Management
+
+Add custom service credentials to the vault:
+
+```bash
+# Via Dashboard: Credentials > Add Credential
+# Service: custom.github
+# Name: token
+# Key: ghp_...
+```
+
+Or via API:
+
+```bash
+curl -X POST http://localhost:3080/api/credentials \
+  -H "Authorization: Bearer fn_sess_YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service": "custom.github",
+    "name": "token",
+    "key": "ghp_..."
+  }'
+```
+
+Or use environment variable (fallback):
+
+```bash
+export GITHUB_TOKEN=ghp_...
+fishnet
+```
+
+### Security Features
+
+1. **Credential override**: Client-provided auth headers are always replaced with vault credentials
+2. **Endpoint blocking**: Pattern-based blocking with high-severity alerts
+3. **Rate limiting**: Per-service rate limits with configurable windows
+4. **Anomaly detection**: New endpoint alerts, volume spike detection, time-based anomalies
+5. **Audit trail**: Every request logged with cryptographic integrity
+6. **Namespace isolation**: Custom service credentials are namespaced as `custom.{name}` to prevent conflicts
+
+### Use Cases
+
+- **GitHub automation**: List repos, create issues, manage PRs (with deletion protection)
+- **Stripe integration**: Fetch customer data, create invoices (with transfer blocking)
+- **Internal APIs**: Proxy to internal microservices with centralized auth
+- **Third-party APIs**: Zapier, Airtable, Notion, etc.
+- **Webhook receivers**: Proxy agent-generated webhooks to external services
+
+### Wildcard Pattern Matching
+
+Endpoint patterns support `*` wildcards:
+
+- `DELETE /repos/*` - Matches `DELETE /repos/fishnetio/fishnet`
+- `POST /orgs/*/teams/*` - Matches `POST /orgs/acme/teams/engineering`
+- `*` - Matches any method and path
+- `GET *` - Matches all GET requests
+
+Patterns are matched against the path **after** `/custom/{name}/`.

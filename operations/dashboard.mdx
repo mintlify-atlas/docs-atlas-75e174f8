@@ -1,0 +1,223 @@
+---
+title: "Dashboard"
+description: "Monitor and manage Fishnet through the web interface"
+---
+
+## Accessing the Dashboard
+
+The Fishnet dashboard is available at:
+
+```
+http://localhost:8473
+```
+
+The dashboard is served by the Fishnet process and requires authentication on first access.
+
+<Steps>
+  <Step title="Start Fishnet">
+    ```bash
+    fishnet start
+    ```
+  </Step>
+  
+  <Step title="Open your browser">
+    Navigate to `http://localhost:8473`
+  </Step>
+  
+  <Step title="Login">
+    Use the password you configured during `fishnet init`.
+  </Step>
+</Steps>
+
+## Dashboard Overview
+
+The main dashboard provides real-time monitoring of your security proxy:
+
+### Status Card
+
+- **Process Status**: Running/stopped indicator
+- **Uptime**: How long the current process has been running
+- **Version**: Current Fishnet version
+- **Port**: Active listening port
+
+### Metric Cards
+
+Four key metrics are displayed at the top:
+
+1. **Today's Spend**: Total LLM costs across all services
+2. **Request Count**: Number of proxied requests today
+3. **Active Alerts**: Unresolved security alerts
+4. **Daily Budget**: Remaining budget as a percentage
+
+### Spend by Service
+
+Visual breakdown of spending by LLM provider:
+- OpenAI
+- Anthropic
+- Custom providers
+
+Each service shows:
+- Total cost (USD)
+- Request count
+- Percentage of total spend
+
+## Pages
+
+### Spend Analytics
+
+**Path**: `/spend`
+
+Detailed cost tracking and budget monitoring:
+
+- **Budget Gauges**: Visual progress bars for daily and monthly budgets
+- **Spend Trends**: Time-series charts showing spending patterns
+- **Service Breakdown**: Bar charts comparing costs across providers
+- **Period Selector**: View data by day, week, or month
+
+<Note>
+Spend data is tracked at the millisecond level and aggregated in real-time. All costs are displayed in USD.
+</Note>
+
+### Alerts
+
+**Path**: `/alerts`
+
+Security event monitoring and notification management:
+
+- **Alert Types**:
+  - Prompt drift detection
+  - Prompt size violations
+  - Budget warnings and exceeded
+  - On-chain transaction denials
+  - Rate limit hits
+  - Anomalous volume patterns
+  - New endpoint access
+  - Time-based anomalies
+  - High-severity denied actions
+
+- **Filtering**: By type, severity (critical/warning), and status
+- **Bulk Actions**: Dismiss multiple alerts at once
+- **Pagination**: Navigate through historical alerts
+
+Each alert shows:
+- Alert type and severity badge
+- Service name
+- Descriptive message
+- Timestamp
+- Dismiss action
+
+### On-chain
+
+**Path**: `/onchain`
+
+Blockchain transaction monitoring and permit management:
+
+- **Signer Status**: Connected wallet address and balance
+- **Policy Limits**: Maximum gas price, daily transaction limits
+- **Permit History**: All signed transaction permits with filters
+- **Address Whitelist**: Manage allowed destination addresses
+
+### Settings
+
+**Path**: `/settings`
+
+Configuration management:
+
+- **Alert Toggles**: Enable/disable specific alert types
+- **Retention Policy**: Configure alert history retention (days)
+- **Webhook Configuration**: Setup Discord/Slack notifications
+- **Rate Limits**: Adjust per-minute request limits
+- **Budget Configuration**: Set daily and monthly spending limits
+
+## Configuration Copy
+
+The dashboard provides a quick-copy card for agent environment setup:
+
+```bash
+export OPENAI_BASE_URL="http://localhost:8473/proxy/openai"
+export ANTHROPIC_BASE_URL="http://localhost:8473/proxy/anthropic"
+```
+
+Click the copy button to add these to your agent's environment.
+
+## Quick Actions
+
+Common CLI commands are accessible directly from the dashboard:
+
+- **Add Credential**: Opens the vault to add API keys
+- **View Policy**: Opens `fishnet.toml` in your `$EDITOR`
+- **Run Doctor**: Validates installation and configuration
+- **View Logs**: Shows audit log entries
+
+## Real-time Updates
+
+The dashboard uses polling to refresh data:
+
+- **Alerts**: Every 5 seconds
+- **Spend**: Every 10 seconds
+- **Status**: Every 15 seconds
+- **On-chain permits**: Every 8 seconds
+
+<Info>
+All real-time updates happen in the background without disrupting your workflow.
+</Info>
+
+## Responsive Design
+
+The dashboard is fully responsive and works on:
+
+- Desktop browsers (Chrome, Firefox, Safari, Edge)
+- Tablets (landscape and portrait)
+- Mobile devices (with touch-optimized controls)
+
+## Keyboard Shortcuts
+
+The dashboard includes a command palette accessible with `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux):
+
+- Quick navigation to any page
+- Search for specific features
+- Execute common actions
+
+## Session Management
+
+Dashboard sessions are secured with:
+
+- **Password authentication**: Derived from your master password
+- **Session tokens**: Expire after inactivity
+- **Rate limiting**: Protects against brute force attacks
+
+<Warning>
+The dashboard should only be accessed from localhost in production. Do not expose port 8473 to external networks.
+</Warning>
+
+## Embedded vs Development Mode
+
+Fishnet can serve the dashboard in two ways:
+
+<Tabs>
+  <Tab title="Embedded (Production)">
+    Built with `make build-prod`, the dashboard is compiled into the binary:
+    
+    - Single executable with all assets
+    - No separate web server needed
+    - Assets served from memory
+    - Optimal performance
+    
+    ```bash
+    make build-prod
+    ./target/release/fishnet start
+    ```
+  </Tab>
+  
+  <Tab title="Development Mode">
+    Run Vite dev server separately for hot module reloading:
+    
+    ```bash
+    make dev
+    ```
+    
+    - API: `http://localhost:8473`
+    - Dashboard: `http://localhost:5173` (proxies API requests)
+    - Live reload on file changes
+  </Tab>
+</Tabs>

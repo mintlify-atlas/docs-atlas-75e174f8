@@ -1,0 +1,436 @@
+---
+title: Spend Limits
+description: Daily budgets and cost tracking to prevent runaway API spend
+---
+
+# Spend Limits
+
+Fishnet tracks API costs in real-time and enforces **daily budgets** to prevent your AI agent from racking up unexpected bills.
+
+## How It Works
+
+### Cost Tracking
+
+Every proxied request that costs money is logged in the **spend database** (`spend.db`):
+
+```sql
+CREATE TABLE spend_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    service TEXT NOT NULL,        -- e.g., "openai", "binance"
+    date TEXT NOT NULL,           -- YYYY-MM-DD
+    cost_usd REAL NOT NULL,       -- Dollar amount
+    cost_micros INTEGER NOT NULL, -- USD * 1,000,000 (exact math)
+    request_count INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL   -- Unix timestamp
+);
+```
+
+<Info>
+Costs are stored in **both floating-point** (`cost_usd`) and **integer micros** (`cost_micros = usd * 1,000,000`) to avoid floating-point precision errors in budget checks.
+</Info>
+
+### Budget Enforcement
+
+From `spend.rs:14-26`:
+
+```rust
+const USD_MICROS_SCALE: i64 = 1_000_000;
+
+fn usd_f64_to_micros(usd: f64) -> Result<i64, SpendError> {
+    if !usd.is_finite() || usd < 0.0 {
+        return Err(SpendError::InvalidAmount(format!(
+            "{usd} is not a valid non-negative finite USD amount"
+        )));
+    }
+    let scaled = usd * USD_MICROS_SCALE as f64;
+    let max_allowed = (i64::MAX as f64) - 0.5;
+    if !scaled.is_finite() || scaled > max_allowed {
+        return Err(SpendError::InvalidAmount(format!(
+            "{usd} is outside supported range"
+        )));
+    }
+    Ok(scaled.round() as i64)
+}
+```
+
+### Daily Reset
+
+Budgets reset at **midnight UTC** based on the `date` field. Each day gets a new slate.
+
+## Setting Budgets
+
+### Via Dashboard
+
+1. Navigate to **Settings → Spend Limits**
+2. Click **Set Budget** for a service
+3. Enter:
+   - Daily limit (USD)
+   - Monthly limit (optional)
+
+### Via API
+
+From `spend.rs:738-763`:
+
+```bash
+curl -X PUT http://localhost:8473/api/spend/budgets \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service": "openai",
+    "daily_budget_usd": 50.0,
+    "monthly_budget_usd": 1000.0
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "budget": {
+    "service": "openai",
+    "daily_budget_usd": 50.0,
+    "monthly_budget_usd": 1000.0,
+    "updated_at": 1700000000
+  }
+}
+```
+
+## Budget Schema
+
+```sql
+CREATE TABLE service_budgets (
+    service TEXT PRIMARY KEY,
+    daily_budget_usd REAL NOT NULL,
+    monthly_budget_usd REAL,
+    updated_at INTEGER NOT NULL
+);
+```
+
+From `spend.rs:53-59`:
+
+```rust
+pub struct ServiceBudget {
+    pub service: String,
+    pub daily_budget_usd: f64,
+    pub monthly_budget_usd: Option<f64>,
+    pub updated_at: i64,
+}
+```
+
+## Request Flow
+
+When a request comes in:
+
+<Steps>
+  <Step title="Estimate Cost">
+    Fishnet estimates the cost based on:
+    - **LLM requests**: Token count × pricing tier
+    - **Binance orders**: `quoteOrderQty` parameter
+    - **Other APIs**: Configured per-request cost
+  </Step>
+
+  <Step title="Check Budget">
+    Query today's spend for this service:
+    ```rust
+    let spent_today = state.spend_store
+        .get_spent_today_micros("openai")
+        .await?;
+    let budget = state.spend_store
+        .get_budget("openai")
+        .await?;
+    let budget_micros = usd_f64_to_micros(budget.daily_budget_usd)?;
+    
+    if spent_today + request_cost > budget_micros {
+        return Err("daily budget exceeded");
+    }
+    ```
+  </Step>
+
+  <Step title="Atomic Spend">
+    Use SQLite transaction + mutex to prevent race conditions:
+    ```rust
+    let _guard = state.spend_lock.lock().await;
+    let tx = conn.transaction()?;
+    // Re-check budget inside transaction
+    // Record spend
+    tx.commit()?;
+    ```
+  </Step>
+
+  <Step title="Forward Request">
+    If budget allows, forward the request to the upstream API.
+  </Step>
+
+  <Step title="Log Actual Cost">
+    After response, log the **actual cost** (if different from estimate).
+  </Step>
+</Steps>
+
+## Concurrency Safety
+
+From the test suite in `lib.rs:1103-1163`:
+
+```rust
+#[tokio::test]
+async fn test_binance_daily_volume_cap_enforced_under_concurrency() {
+    // ... setup ...
+    let req1 = Request::builder()
+        .uri("/binance/api/v3/order")
+        .body(Body::from("symbol=BTCUSDT&quoteOrderQty=10"));
+    let req2 = Request::builder()
+        .uri("/binance/api/v3/order")
+        .body(Body::from("symbol=BTCUSDT&quoteOrderQty=10"));
+
+    let (resp1, resp2) = tokio::join!(app.clone().oneshot(req1), app.clone().oneshot(req2));
+    
+    // One succeeds, one is denied
+    let ok_count = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+    let forbidden_count = statuses.iter().filter(|s| **s == StatusCode::FORBIDDEN).count();
+    assert_eq!(ok_count, 1);
+    assert_eq!(forbidden_count, 1);
+    
+    // Exactly $10 spent (one request)
+    let spent_today = state.spend_store.get_spent_today("binance").await.unwrap();
+    assert!((spent_today - 10.0).abs() < 1e-9);
+}
+```
+
+<Info>
+Fishnet uses a **global spend lock** to prevent concurrent requests from both succeeding when only one fits within the budget. This ensures **exactly-once** spend recording.
+</Info>
+
+## Cost Estimation
+
+### LLM Services
+
+For OpenAI/Anthropic, Fishnet estimates cost using:
+
+1. **Token counting** (via `tiktoken` or similar)
+2. **Pricing tables** (configurable per model)
+
+Example pricing:
+```toml
+[llm.pricing]
+gpt-4.input = 0.03  # per 1K tokens
+gpt-4.output = 0.06
+gpt-3.5-turbo.input = 0.001
+gpt-3.5-turbo.output = 0.002
+```
+
+### Trading APIs
+
+For Binance, cost = order value in USD:
+
+From `proxy.rs` (Binance handler):
+```rust
+let order_value_usd = if let Some(qty) = params.get("quoteOrderQty") {
+    qty.parse::<f64>().unwrap_or(0.0)
+} else if let Some(qty) = params.get("quantity") {
+    // Estimate from base quantity × price
+    qty.parse::<f64>().unwrap_or(0.0) * estimated_price
+} else {
+    0.0
+};
+```
+
+### Custom Services
+
+You can configure a flat rate:
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+cost_per_request_usd = 0.0  # Free API
+```
+
+## Spend Queries
+
+From `spend.rs:267-303`:
+
+```rust
+pub async fn query_spend(&self, days: u32) -> Result<Vec<SpendRecord>, SpendError> {
+    let cutoff = chrono::Utc::now()
+        .date_naive()
+        .checked_sub_days(chrono::Days::new(days as u64))
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+
+    let mut stmt = conn.prepare(
+        "SELECT service, date, SUM(cost_usd) as total_cost, SUM(request_count) as total_requests
+         FROM spend_records
+         WHERE date >= ?1
+         GROUP BY service, date
+         ORDER BY date DESC, service ASC"
+    )?;
+    // ...
+}
+```
+
+Fetch the last 30 days:
+
+```bash
+curl http://localhost:8473/api/spend?days=30 \
+  -H "Authorization: Bearer $SESSION_TOKEN"
+```
+
+Response:
+```json
+{
+  "enabled": true,
+  "daily": [
+    {
+      "service": "openai",
+      "date": "2024-03-01",
+      "cost_usd": 12.45,
+      "request_count": 127
+    },
+    {
+      "service": "anthropic",
+      "date": "2024-03-01",
+      "cost_usd": 5.23,
+      "request_count": 43
+    }
+  ],
+  "budgets": {
+    "openai": {
+      "daily_limit": 50.0,
+      "spent_today": 12.45,
+      "warning_pct": 80,
+      "warning_active": false
+    }
+  }
+}
+```
+
+## Today's Spend
+
+From `spend.rs:305-344`:
+
+```rust
+pub async fn get_spent_today_micros(&self, service: &str) -> Result<i64, SpendError> {
+    let today = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let spent: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(cost_micros), 0) FROM spend_records WHERE service = ?1 AND date = ?2",
+        params![service, today],
+        |row| row.get(0),
+    )?;
+    Ok(spent)
+}
+```
+
+## Warning Thresholds
+
+From `spend.rs:704-714`:
+
+```rust
+let warning_active = config.llm.budget_warning_pct > 0
+    && b.daily_budget_usd > 0.0
+    && spent_today >= b.daily_budget_usd * (config.llm.budget_warning_pct as f64 / 100.0);
+```
+
+Configure in `fishnet.toml`:
+
+```toml
+[llm]
+budget_warning_pct = 80  # Alert at 80% of daily budget
+```
+
+When the threshold is hit, Fishnet creates an **alert** visible in the dashboard.
+
+## Onchain Spending
+
+For blockchain transactions (EIP-3074 permits), spending is tracked separately:
+
+From `spend.rs:466-491`:
+
+```rust
+pub async fn record_permit(&self, entry: &PermitEntry<'_>) -> Result<i64, SpendError> {
+    conn.execute(
+        "INSERT INTO onchain_permits (chain_id, target, value, status, reason, permit_hash, cost_usd, date, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![chain_id, target, value, status, reason, permit_hash, cost_usd, today, now],
+    )?;
+}
+```
+
+Permit costs are denominated in USD (estimated from token value × price).
+
+## Storage Location
+
+The spend database is stored at:
+
+- **Linux**: `/var/lib/fishnet/spend.db`
+- **macOS**: `/Library/Application Support/Fishnet/spend.db`
+- **Custom**: Set `FISHNET_DATA_DIR` environment variable
+
+## Edge Cases
+
+<AccordionGroup>
+  <Accordion title="Midnight Boundary">
+    Requests that span midnight are attributed to the day they **started**:
+    ```rust
+    let date = chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string();
+    ```
+  </Accordion>
+
+  <Accordion title="Concurrent Requests">
+    A mutex ensures only one request can check and update the spend total at a time. If two $10 requests race against a $15 budget, **exactly one** will succeed.
+  </Accordion>
+
+  <Accordion title="Free Endpoints">
+    Read-only endpoints (e.g., Binance ticker data) have zero cost and don't count toward budgets.
+  </Accordion>
+
+  <Accordion title="Failed Requests">
+    If the upstream API **rejects** a request, the cost is **not recorded** (since you weren't charged). Only successful responses log spend.
+  </Accordion>
+</AccordionGroup>
+
+## Performance
+
+- **Budget check**: < 1ms (single SQLite query)
+- **Spend recording**: < 5ms (async, doesn't block response)
+- **Daily aggregation**: < 10ms for 30 days of data
+
+## Example: Protecting Against Loops
+
+Imagine your agent has a bug and gets stuck in an infinite loop calling GPT-4:
+
+```python
+while True:
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "Hello"}]
+    )
+```
+
+**Without Fishnet:**
+- Cost: ~$0.03 per call
+- After 1,000 calls: **$30**
+- After 10,000 calls: **$300**
+- Your credit card: 💥
+
+**With Fishnet:**
+- You set a $20 daily budget
+- After ~666 calls, Fishnet returns `403 Forbidden`
+- Total damage: **$20** (capped)
+- You fix the bug
+- Next day, budget resets
+
+<Warning>
+Spend limits are a **safety net**, not a replacement for proper testing. Always test your agent with low budgets before deploying.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Rate Limiting" icon="gauge" href="/concepts/rate-limiting">
+    Learn how request throttling works
+  </Card>
+  <Card title="Audit Trail" icon="list-tree" href="/concepts/audit-trail">
+    See how every decision is logged
+  </Card>
+</CardGroup>

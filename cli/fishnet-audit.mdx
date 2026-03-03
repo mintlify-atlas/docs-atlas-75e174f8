@@ -1,0 +1,267 @@
+---
+title: fishnet audit
+description: Query and export audit logs
+---
+
+## Synopsis
+
+```bash
+fishnet audit [OPTIONS]
+fishnet audit export [OPTIONS]
+```
+
+Queries the audit log database to view API request history, policy decisions, spending, and security events. Can export logs to CSV format for analysis.
+
+## Subcommands
+
+### List audit entries (default)
+
+```bash
+fishnet audit [OPTIONS]
+```
+
+Displays audit log entries in a human-readable table format.
+
+<ParamField path="--limit" type="number" default="20">
+  Maximum number of entries to display (1-200).
+</ParamField>
+
+<ParamField path="--service" type="string" optional>
+  Filter by service name (e.g., "openai", "anthropic").
+</ParamField>
+
+<ParamField path="--decision" type="string" optional>
+  Filter by policy decision (e.g., "allow", "deny", "log").
+</ParamField>
+
+<ParamField path="--from" type="number" optional>
+  Filter entries from this Unix timestamp (milliseconds).
+</ParamField>
+
+<ParamField path="--to" type="number" optional>
+  Filter entries to this Unix timestamp (milliseconds).
+</ParamField>
+
+### Export audit entries
+
+```bash
+fishnet audit export [OPTIONS]
+```
+
+Exports audit log entries to CSV format.
+
+<ParamField path="--output" type="string" optional>
+  Path to write CSV file. If not specified, outputs to stdout.
+</ParamField>
+
+<ParamField path="--service" type="string" optional>
+  Filter by service name.
+</ParamField>
+
+<ParamField path="--decision" type="string" optional>
+  Filter by policy decision.
+</ParamField>
+
+<ParamField path="--from" type="number" optional>
+  Filter entries from this Unix timestamp (milliseconds).
+</ParamField>
+
+<ParamField path="--to" type="number" optional>
+  Filter entries to this Unix timestamp (milliseconds).
+</ParamField>
+
+## Examples
+
+### List recent audit entries
+
+```bash
+fishnet audit
+```
+
+**Output:**
+```
+Showing 20 of 142 audit entries
+TIME             SERVICE      DECISION COST_USD   REASON     ACTION
+03-03 14:32      openai       allow    0.002340   -          POST /v1/chat/completions
+03-03 14:31      anthropic    allow    0.001200   -          POST /v1/messages
+03-03 14:30      openai       deny     -          rate_lim~  POST /v1/chat/completions
+03-03 14:28      openai       allow    0.003100   -          POST /v1/chat/completions
+```
+
+### List with custom limit
+
+```bash
+fishnet audit --limit 50
+```
+
+**Output:**
+```
+Showing 50 of 142 audit entries
+...
+```
+
+### Filter by service
+
+```bash
+fishnet audit --service openai --limit 10
+```
+
+**Output:**
+```
+Showing 10 of 89 audit entries
+TIME             SERVICE      DECISION COST_USD   REASON     ACTION
+03-03 14:32      openai       allow    0.002340   -          POST /v1/chat/completions
+03-03 14:30      openai       deny     -          rate_lim~  POST /v1/chat/completions
+03-03 14:28      openai       allow    0.003100   -          POST /v1/chat/completions
+```
+
+### Filter by decision
+
+```bash
+fishnet audit --decision deny --limit 10
+```
+
+**Output:**
+```
+Showing 10 of 15 audit entries
+TIME             SERVICE      DECISION COST_USD   REASON     ACTION
+03-03 14:30      openai       deny     -          rate_lim~  POST /v1/chat/completions
+03-03 14:15      anthropic    deny     -          budget_ex~ POST /v1/messages
+03-03 13:45      openai       deny     -          prompt_dr~ POST /v1/chat/completions
+```
+
+### Filter by time range
+
+```bash
+# Get logs from last hour
+from=$(date -u -d '1 hour ago' +%s%3N)
+fishnet audit --from $from
+```
+
+### Export to CSV
+
+```bash
+fishnet audit export --output audit-log.csv
+```
+
+**Output:**
+```
+Audit CSV written to audit-log.csv
+```
+
+**CSV format:**
+```csv
+id,timestamp,intent_type,service,action,decision,reason,cost_usd,policy_version_hash,intent_hash,permit_hash,merkle_root
+1,1709476320000,llm,openai,POST /v1/chat/completions,allow,,0.00234000,a1b2c3...,d4e5f6...,g7h8i9...,j0k1l2...
+2,1709476260000,llm,anthropic,POST /v1/messages,allow,,0.00120000,a1b2c3...,m3n4o5...,p6q7r8...,s9t0u1...
+```
+
+### Export to stdout and pipe
+
+```bash
+fishnet audit export | grep deny > denied-requests.csv
+```
+
+### Export with filters
+
+```bash
+fishnet audit export --service openai --decision allow --output openai-allowed.csv
+```
+
+### Export time range
+
+```bash
+# Export today's logs
+from=$(date -u -d 'today 00:00' +%s%3N)
+to=$(date -u +%s%3N)
+fishnet audit export --from $from --to $to --output today.csv
+```
+
+## Output format
+
+### Table columns (list mode)
+
+- **TIME** - Timestamp in MM-DD HH:MM format (UTC)
+- **SERVICE** - API service name (truncated to 12 chars)
+- **DECISION** - Policy decision (allow, deny, log)
+- **COST_USD** - Request cost in USD (6 decimal places) or "-" if not applicable
+- **REASON** - Short reason for decision (truncated to 10 chars)
+- **ACTION** - HTTP method and path
+
+### CSV columns (export mode)
+
+- **id** - Unique audit entry ID
+- **timestamp** - Unix timestamp in milliseconds
+- **intent_type** - Type of request (llm, etc.)
+- **service** - API service name
+- **action** - HTTP method and path
+- **decision** - Policy decision
+- **reason** - Reason for decision (if any)
+- **cost_usd** - Request cost (8 decimal places)
+- **policy_version_hash** - SHA256 hash of policy version
+- **intent_hash** - SHA256 hash of request intent
+- **permit_hash** - SHA256 hash of permit (if applicable)
+- **merkle_root** - Merkle root for cryptographic verification
+
+## Behavior
+
+- Queries the SQLite audit database
+- Results are paginated (limit parameter)
+- Filters are combined with AND logic
+- CSV output uses proper escaping for special characters
+- Formula injection protection (prefixes `=`, `+`, `-`, `@` with `'`)
+
+## Error messages
+
+**No entries found:**
+```
+No audit entries found.
+```
+The database is empty or filters returned no results.
+
+**Failed to query:**
+```
+failed to query audit log: <error>
+```
+Database error occurred during query.
+
+**Failed to export:**
+```
+failed to export audit log: <error>
+```
+Database error occurred during export.
+
+**Failed to write file:**
+```
+failed to write export file: Permission denied
+```
+Cannot write to the specified output file.
+
+## Exit codes
+
+- **0** - Audit logs retrieved successfully (or empty)
+- **1** - Error occurred (database error, file write failed, etc.)
+
+## Common decisions
+
+- **allow** - Request was permitted by policy
+- **deny** - Request was blocked by policy
+- **log** - Request was logged for monitoring
+
+## Common deny reasons
+
+- **rate_limit_exceeded** - Too many requests per minute
+- **budget_exceeded** - Daily spending budget reached
+- **prompt_drift_detected** - Prompt baseline drift threshold exceeded
+- **credential_not_found** - No valid credential for service
+- **policy_violation** - Request violated security policy
+
+## Data retention
+
+Audit logs are retained according to the `alerts.retention_days` setting in fishnet.toml (default: 90 days). Older entries are automatically cleaned up on server startup.
+
+## Related commands
+
+- [fishnet status](/cli/fishnet-status) - View summary of today's activity
+- [fishnet policy](/cli/fishnet-policy) - Edit security policies
+- [fishnet backup](/cli/fishnet-backup) - Backup audit database

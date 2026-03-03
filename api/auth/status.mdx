@@ -1,0 +1,103 @@
+---
+title: "Get Authentication Status"
+description: "Check whether Fishnet is initialized and if the current session is authenticated"
+---
+
+## Endpoint
+
+```http
+GET /api/auth/status
+```
+
+## Authentication
+
+This endpoint is publicly accessible and does not require authentication. However, it will check if the provided bearer token (if any) is valid.
+
+## Response
+
+<ResponseField name="initialized" type="boolean" required>
+  Whether the master password has been configured
+</ResponseField>
+
+<ResponseField name="authenticated" type="boolean" required>
+  Whether the current request includes a valid authentication token
+</ResponseField>
+
+## Response Example
+
+```json
+{
+  "initialized": true,
+  "authenticated": false
+}
+```
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3742/api/auth/status
+```
+
+```python Python
+import requests
+
+response = requests.get("http://localhost:3742/api/auth/status")
+data = response.json()
+
+print(f"Initialized: {data['initialized']}")
+print(f"Authenticated: {data['authenticated']}")
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:3742/api/auth/status');
+const data = await response.json();
+
+console.log(`Initialized: ${data.initialized}`);
+console.log(`Authenticated: ${data.authenticated}`);
+```
+
+</CodeGroup>
+
+## Check with Authentication Token
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:3742/api/auth/status \
+  -H "Authorization: Bearer fn_sess_..."
+```
+
+```python Python
+import requests
+
+headers = {"Authorization": "Bearer fn_sess_..."}
+response = requests.get(
+    "http://localhost:3742/api/auth/status",
+    headers=headers
+)
+data = response.json()
+
+if data["authenticated"]:
+    print("Token is valid")
+else:
+    print("Token is invalid or expired")
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:3742/api/auth/status', {
+  headers: {
+    'Authorization': 'Bearer fn_sess_...'
+  }
+});
+const data = await response.json();
+
+if (data.authenticated) {
+  console.log('Token is valid');
+} else {
+  console.log('Token is invalid or expired');
+}
+```
+
+</CodeGroup>

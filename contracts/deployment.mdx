@@ -1,0 +1,379 @@
+---
+title: Deployment Guide
+description: Deploy FishnetWallet to local Anvil, testnets, and mainnet
+---
+
+## Prerequisites
+
+Ensure you have Foundry installed:
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+Navigate to the contracts directory:
+
+```bash
+cd contracts
+```
+
+## Environment Variables
+
+The deployment script requires the following environment variables:
+
+<ParamField path="SIGNER_ADDRESS" type="address" required>
+  Address of the Fishnet backend signer. This address will be authorized to sign permits.
+  
+  Get this from your Fishnet server's `/api/onchain/status` endpoint.
+</ParamField>
+
+<ParamField path="BASE_SEPOLIA_RPC_URL" type="string">
+  RPC endpoint for Base Sepolia testnet.
+  
+  **Example**: `https://sepolia.base.org`
+</ParamField>
+
+<ParamField path="BASE_MAINNET_RPC_URL" type="string">
+  RPC endpoint for Base mainnet.
+  
+  **Example**: `https://mainnet.base.org`
+</ParamField>
+
+<ParamField path="BASESCAN_API_KEY" type="string">
+  Basescan API key for contract verification.
+  
+  Get one at [basescan.org/apis](https://basescan.org/apis)
+</ParamField>
+
+<ParamField path="DEPLOYER_PRIVATE_KEY" type="hex">
+  Private key of the deployer account (becomes the wallet owner).
+  
+  <Warning>Never commit private keys to version control!</Warning>
+</ParamField>
+
+## Local Deployment (Anvil)
+
+Deploy to a local Anvil node for development and testing.
+
+<Steps>
+  <Step title="Start Anvil">
+    In a separate terminal, start a local Ethereum node:
+    
+    ```bash
+    anvil
+    ```
+    
+    Anvil will start on `http://127.0.0.1:8545` and display 10 test accounts with private keys.
+  </Step>
+  
+  <Step title="Set Signer Address">
+    Use Anvil account #1 as the signer for testing:
+    
+    ```bash
+    export SIGNER_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+    ```
+  </Step>
+  
+  <Step title="Deploy the Contract">
+    Deploy using Anvil account #0 as the deployer:
+    
+    ```bash
+    forge script script/Deploy.s.sol:DeployFishnetWallet \
+      --rpc-url http://127.0.0.1:8545 \
+      --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+      --broadcast
+    ```
+    
+    <Info>
+      The private key `0xac09...ff80` is Anvil's default account #0. This is safe for local testing.
+    </Info>
+  </Step>
+  
+  <Step title="Verify Deployment">
+    The script will output:
+    
+    ```
+    FishnetWallet deployed at: 0x5FbDB2315678afecb367f032d93F642f64180aa3
+    Signer: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+    Owner: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+    Chain ID: 31337
+    Deployment info written to: deployments/localhost.json
+    ```
+    
+    The deployment details are saved to `deployments/localhost.json`.
+  </Step>
+</Steps>
+
+## Base Sepolia (Testnet)
+
+Deploy to Base Sepolia for testnet integration.
+
+<Steps>
+  <Step title="Get Testnet ETH">
+    Get Base Sepolia ETH from a faucet:
+    
+    - [Base Sepolia Faucet](https://www.coinbase.com/faucets/base-ethereum-goerli-faucet)
+    - [Alchemy Faucet](https://www.alchemy.com/faucets/base-sepolia)
+  </Step>
+  
+  <Step title="Set Environment Variables">
+    Configure your deployment environment:
+    
+    ```bash
+    export BASE_SEPOLIA_RPC_URL="https://sepolia.base.org"
+    export SIGNER_ADDRESS="<your-fishnet-signer-address>"
+    export DEPLOYER_PRIVATE_KEY="<your-deployer-private-key>"
+    export BASESCAN_API_KEY="<your-basescan-api-key>"
+    ```
+  </Step>
+  
+  <Step title="Deploy and Verify">
+    Run the deployment script with verification:
+    
+    ```bash
+    forge script script/Deploy.s.sol:DeployFishnetWallet \
+      --rpc-url base_sepolia \
+      --private-key $DEPLOYER_PRIVATE_KEY \
+      --broadcast \
+      --verify
+    ```
+    
+    The `--verify` flag automatically verifies the contract on Basescan after deployment.
+  </Step>
+  
+  <Step title="Save Deployment Info">
+    The script saves deployment details to `deployments/base-sepolia.json`:
+    
+    ```json
+    {
+      "wallet": "0x...",
+      "signer": "0x...",
+      "owner": "0x...",
+      "chainId": 84532,
+      "deployBlock": 12345678,
+      "timestamp": 1234567890
+    }
+    ```
+  </Step>
+</Steps>
+
+## Base Mainnet (Production)
+
+<Warning>
+  **Production Deployment**: Ensure your signer address is correct and your private key is secure before deploying to mainnet.
+</Warning>
+
+<Steps>
+  <Step title="Double-Check Configuration">
+    Verify your environment variables:
+    
+    ```bash
+    echo "Signer: $SIGNER_ADDRESS"
+    echo "RPC: $BASE_MAINNET_RPC_URL"
+    ```
+    
+    <Warning>
+      The signer address CANNOT be changed after deployment without redeploying. Verify this is your production Fishnet signer!
+    </Warning>
+  </Step>
+  
+  <Step title="Set Environment Variables">
+    ```bash
+    export BASE_MAINNET_RPC_URL="https://mainnet.base.org"
+    export SIGNER_ADDRESS="<production-fishnet-signer>"
+    export DEPLOYER_PRIVATE_KEY="<secure-deployer-key>"
+    export BASESCAN_API_KEY="<basescan-api-key>"
+    ```
+  </Step>
+  
+  <Step title="Deploy to Mainnet">
+    ```bash
+    forge script script/Deploy.s.sol:DeployFishnetWallet \
+      --rpc-url base_mainnet \
+      --private-key $DEPLOYER_PRIVATE_KEY \
+      --broadcast \
+      --verify
+    ```
+  </Step>
+  
+  <Step title="Verify on Basescan">
+    After deployment, verify your contract is visible on [Basescan](https://basescan.org/).
+    
+    The deployment info is saved to `deployments/base-mainnet.json`.
+  </Step>
+</Steps>
+
+## Multi-Chain Deployments
+
+Fishnet supports deployments across multiple chains. The deployment script automatically detects the chain and saves deployment info to the correct file:
+
+<CodeGroup>
+```bash Base Sepolia (84532)
+deployments/base-sepolia.json
+```
+
+```bash Base Mainnet (8453)
+deployments/base-mainnet.json
+```
+
+```bash Arbitrum Sepolia (421614)
+deployments/arbitrum-sepolia.json
+```
+
+```bash Localhost (31337)
+deployments/localhost.json
+```
+</CodeGroup>
+
+The chain detection logic is in `script/Deploy.s.sol:36-43`:
+
+```solidity script/Deploy.s.sol:36-43
+function _getNetworkName() internal view returns (string memory) {
+    if (block.chainid == 84532) return "base-sepolia";
+    if (block.chainid == 8453) return "base-mainnet";
+    if (block.chainid == 421614) return "arbitrum-sepolia";
+    if (block.chainid == 42161) return "arbitrum-one";
+    if (block.chainid == 31337) return "localhost";
+    return vm.toString(block.chainid);
+}
+```
+
+## Deployment Script Details
+
+The deployment script (`script/Deploy.s.sol`) performs the following steps:
+
+<Steps>
+  <Step title="Read Signer Address">
+    ```solidity script/Deploy.s.sol:9
+    address signerAddress = vm.envAddress("SIGNER_ADDRESS");
+    ```
+    
+    Reads `SIGNER_ADDRESS` from environment. Reverts if not set.
+  </Step>
+  
+  <Step title="Deploy Contract">
+    ```solidity script/Deploy.s.sol:13
+    FishnetWallet wallet = new FishnetWallet(signerAddress);
+    ```
+    
+    Deploys the contract with the signer address. `msg.sender` becomes the owner.
+  </Step>
+  
+  <Step title="Log Deployment Info">
+    ```solidity script/Deploy.s.sol:14-17
+    console.log("FishnetWallet deployed at:", address(wallet));
+    console.log("Signer:", signerAddress);
+    console.log("Owner:", msg.sender);
+    console.log("Chain ID:", block.chainid);
+    ```
+  </Step>
+  
+  <Step title="Write JSON Deployment File">
+    ```solidity script/Deploy.s.sol:21-33
+    string memory networkName = _getNetworkName();
+    string memory json = "deployment";
+    vm.serializeAddress(json, "wallet", address(wallet));
+    vm.serializeAddress(json, "signer", signerAddress);
+    vm.serializeAddress(json, "owner", msg.sender);
+    vm.serializeUint(json, "chainId", block.chainid);
+    vm.serializeUint(json, "deployBlock", block.number);
+    string memory finalJson = vm.serializeUint(json, "timestamp", block.timestamp);
+    
+    string memory path = string.concat("deployments/", networkName, ".json");
+    vm.writeJson(finalJson, path);
+    ```
+    
+    Saves all deployment metadata to a JSON file for future reference.
+  </Step>
+</Steps>
+
+## Post-Deployment Steps
+
+<CardGroup cols={2}>
+  <Card title="Update Fishnet Config" icon="gear">
+    Add the deployed wallet address to your Fishnet server's `config.toml`:
+    
+    ```toml
+    [onchain]
+    enabled = true
+    wallet_address = "0x..."  # Deployed contract address
+    chain_ids = [84532]       # Or [8453] for mainnet
+    ```
+  </Card>
+  
+  <Card title="Fund the Wallet" icon="money-bill">
+    Send ETH to the wallet for transaction execution:
+    
+    ```bash
+    cast send <WALLET_ADDRESS> --value 1ether \
+      --private-key $YOUR_PRIVATE_KEY \
+      --rpc-url $BASE_SEPOLIA_RPC_URL
+    ```
+  </Card>
+  
+  <Card title="Verify Signer" icon="key">
+    Confirm the signer address matches your Fishnet backend:
+    
+    ```bash
+    cast call <WALLET_ADDRESS> "fishnetSigner()" \
+      --rpc-url $BASE_SEPOLIA_RPC_URL
+    ```
+  </Card>
+  
+  <Card title="Test Execution" icon="vial">
+    Run an end-to-end test to verify the deployment:
+    
+    ```bash
+    bash scripts/sc3-integration-test.sh
+    ```
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: SIGNER_ADDRESS not set">
+    The deployment script requires `SIGNER_ADDRESS` to be set:
+    
+    ```bash
+    export SIGNER_ADDRESS=0x...
+    ```
+    
+    Get your signer address from the Fishnet server status endpoint.
+  </Accordion>
+  
+  <Accordion title="Error: Insufficient funds for gas">
+    Your deployer account needs ETH to pay for gas:
+    
+    - **Testnet**: Get ETH from a faucet
+    - **Mainnet**: Send ETH to your deployer address
+  </Accordion>
+  
+  <Accordion title="Verification fails">
+    If Basescan verification fails, manually verify:
+    
+    ```bash
+    forge verify-contract <CONTRACT_ADDRESS> \
+      src/FishnetWallet.sol:FishnetWallet \
+      --constructor-args $(cast abi-encode "constructor(address)" $SIGNER_ADDRESS) \
+      --etherscan-api-key $BASESCAN_API_KEY \
+      --chain base-sepolia
+    ```
+  </Accordion>
+  
+  <Accordion title="Wrong chain ID in deployment file">
+    The script auto-detects the chain. If deploying to a custom network, update `_getNetworkName()` in `Deploy.s.sol`.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Test Your Deployment" icon="flask" href="/contracts/testing">
+    Run the full test suite to verify your deployment
+  </Card>
+  <Card title="EIP-712 Signing" icon="signature" href="/contracts/eip712-permits">
+    Learn how to generate and sign permits
+  </Card>
+</CardGroup>

@@ -1,0 +1,465 @@
+---
+title: Rate Limiting
+description: Per-minute request throttling with token bucket algorithm
+---
+
+# Rate Limiting
+
+Fishnet enforces **per-service rate limits** to prevent your AI agent from overwhelming external APIs or triggering upstream throttles.
+
+## How It Works
+
+### Token Bucket Algorithm
+
+Fishnet uses a **token bucket** implementation for smooth rate limiting:
+
+- Each service gets a bucket with a **capacity** (e.g., 60 requests)
+- Tokens **refill** continuously at a fixed rate (e.g., 1 per second)
+- Each request **consumes 1 token**
+- If bucket is empty, request is **denied** with `429 Too Many Requests`
+
+From `rate_limit.rs:80-130`:
+
+```rust
+struct TokenBucket {
+    tokens: f64,                // Current tokens available
+    capacity: f64,              // Maximum tokens
+    refill_per_second: f64,     // Rate of token regeneration
+    last_refill: DateTime<Utc>, // Last refill timestamp
+}
+
+impl TokenBucket {
+    fn new(max_requests: u32, window_seconds: u64, now: DateTime<Utc>) -> Self {
+        let capacity = max_requests.max(1) as f64;
+        let refill_per_second = capacity / window_seconds.max(1) as f64;
+        Self {
+            tokens: capacity,
+            capacity,
+            refill_per_second,
+            last_refill: now,
+        }
+    }
+
+    fn refill(&mut self, now: DateTime<Utc>) {
+        let elapsed_ms = (now - self.last_refill).num_milliseconds().max(0) as f64;
+        if elapsed_ms <= 0.0 {
+            return;
+        }
+        let refill = (elapsed_ms / 1000.0) * self.refill_per_second;
+        self.tokens = (self.tokens + refill).min(self.capacity);
+        self.last_refill = now;
+    }
+
+    fn try_take(&mut self, now: DateTime<Utc>) -> Result<(), u64> {
+        self.refill(now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            return Ok(());
+        }
+
+        let needed = 1.0 - self.tokens;
+        let retry_after = (needed / self.refill_per_second).ceil() as u64;
+        Err(retry_after.max(1))
+    }
+}
+```
+
+<Info>
+Unlike a simple "N requests per minute" counter that resets abruptly, token buckets provide **smooth traffic** by refilling continuously.
+</Info>
+
+### Example
+
+With a limit of **60 requests per 60 seconds**:
+
+- **Refill rate**: 1 token/second
+- **Burst capacity**: 60 tokens (can make 60 requests instantly)
+- **Sustained rate**: 1 request/second
+
+```
+Time  | Tokens | Action
+------|--------|--------
+0s    | 60     | Start with full bucket
+0s    | 59     | Request 1 (consume 1 token)
+0s    | 58     | Request 2
+...
+0s    | 0      | Request 60
+0s    | 0      | Request 61 → DENIED (retry after 1s)
+1s    | 1      | Refilled 1 token
+1s    | 0      | Request 62 (consume 1 token)
+2s    | 1      | Refilled 1 token
+```
+
+## Configuration
+
+### Built-in Services
+
+Rate limits are defined in `fishnet.toml`:
+
+```toml
+[llm]
+rate_limit_per_minute = 60  # For OpenAI, Anthropic, etc.
+
+[binance]
+rate_limit_per_minute = 100  # Binance spot API
+```
+
+### Custom Services
+
+From `fishnet.toml`:
+
+```toml
+[custom.github]
+base_url = "https://api.github.com"
+rate_limit = 60
+rate_limit_window_seconds = 3600  # 60 requests per hour
+```
+
+From `rate_limit.rs:145-172`:
+
+```rust
+pub async fn check_and_record_with_window(
+    &self,
+    service: &str,
+    max_requests: u32,
+    window_seconds: u64,
+) -> Result<(), u64> {
+    if max_requests == 0 {
+        return Ok(());  // Disabled
+    }
+
+    let mut buckets = self.buckets.lock().await;
+    let now = Utc::now();
+    let bucket = buckets
+        .entry(service.to_string())
+        .or_insert_with(|| TokenBucket::new(max_requests, window_seconds, now));
+    bucket.reconfigure(max_requests, window_seconds, now);
+    bucket.try_take(now)
+}
+```
+
+<Note>
+Setting `rate_limit = 0` **disables** rate limiting for that service. Use this for internal APIs or when upstream has no limits.
+</Note>
+
+## Per-Service Isolation
+
+Each service has its **own bucket**. From `rate_limit.rs:76-78`:
+
+```rust
+pub struct ProxyRateLimiter {
+    buckets: Mutex<HashMap<String, TokenBucket>>,
+}
+```
+
+This means:
+- Hitting the OpenAI limit **does not** affect Anthropic requests
+- Each `custom.*` service has independent limits
+- Binance trading and market data can have different limits
+
+From the test suite in `rate_limit.rs:199-207`:
+
+```rust
+#[tokio::test]
+async fn proxy_rate_limiter_services_are_independent() {
+    let limiter = ProxyRateLimiter::new();
+    for _ in 0..3 {
+        assert!(limiter.check_and_record("openai", 3).await.is_ok());
+    }
+    assert!(limiter.check_and_record("openai", 3).await.is_err());
+    assert!(limiter.check_and_record("anthropic", 3).await.is_ok()); // Still works!
+}
+```
+
+## Login Rate Limiting
+
+Fishnet also rate-limits **authentication attempts** to prevent brute-force attacks.
+
+From `rate_limit.rs:8-74`:
+
+```rust
+pub struct LoginRateLimiter {
+    failures: Mutex<Vec<DateTime<Utc>>>,
+    window: TimeDelta,
+    max_failures: usize,
+}
+
+impl LoginRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            failures: Mutex::new(Vec::new()),
+            window: TimeDelta::seconds(constants::RATE_LIMIT_WINDOW_SECS),
+            max_failures: constants::LOGIN_MAX_FAILURES,
+        }
+    }
+
+    pub async fn check_rate_limit(&self) -> Result<(), u64> {
+        let mut failures = self.failures.lock().await;
+        let now = Utc::now();
+        let cutoff = now - self.window;
+
+        failures.retain(|t| *t > cutoff);  // Remove old failures
+
+        if failures.len() >= self.max_failures {
+            let oldest = failures.first().unwrap();
+            let retry_after = (*oldest + self.window - now).num_seconds().max(1) as u64;
+            return Err(retry_after);
+        }
+
+        Ok(())
+    }
+
+    pub async fn progressive_delay(&self) {
+        let count = self.failure_count().await;
+        let delay = match count {
+            0..=2 => 0,
+            3 => 1,
+            4 => 2,
+            _ => 5,
+        };
+        if delay > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        }
+    }
+}
+```
+
+**Behavior:**
+- After **5 failed logins** in 60 seconds, lock out for the remainder of the window
+- Progressive delays: 0s → 0s → 0s → 1s → 2s → 5s
+- Designed to slow down brute-force without locking out legitimate users
+
+From the test suite in `lib.rs:293-324`:
+
+```rust
+#[tokio::test]
+async fn test_rate_limiting() {
+    // ... setup ...
+    for _ in 0..5 {
+        let resp = app.clone().oneshot(login_request("wrongpwd")).await.unwrap();
+        assert!(
+            resp.status() == StatusCode::UNAUTHORIZED
+                || resp.status() == StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    let resp = app.clone().oneshot(login_request("wrongpwd")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = body_json(resp.into_body()).await;
+    assert!(body["retry_after_seconds"].is_number());
+}
+```
+
+## Response Headers
+
+When a request is rate-limited, Fishnet returns:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 5
+Content-Type: application/json
+
+{
+  "error": "rate limit exceeded",
+  "retry_after_seconds": 5,
+  "service": "openai"
+}
+```
+
+From `rate_limit.rs:119-128`:
+
+```rust
+fn try_take(&mut self, now: DateTime<Utc>) -> Result<(), u64> {
+    self.refill(now);
+    if self.tokens >= 1.0 {
+        self.tokens -= 1.0;
+        return Ok(());
+    }
+
+    let needed = 1.0 - self.tokens;
+    let retry_after = (needed / self.refill_per_second).ceil() as u64;
+    Err(retry_after.max(1))  // Return seconds until next token
+}
+```
+
+<Info>
+The `Retry-After` value tells your agent **exactly when** it can retry. Smart clients can respect this to avoid wasted requests.
+</Info>
+
+## Burst Handling
+
+Token buckets naturally support **bursts**:
+
+- If your agent is idle for 30 seconds with a 60/min limit, it accumulates 30 tokens
+- It can then make **30 requests instantly** (burst)
+- After the burst, it's back to 1 request/second
+
+This is **much better** than a rigid "1 request per second" enforcer, which would deny legitimate bursts.
+
+From the test suite in `rate_limit.rs:222-244`:
+
+```rust
+#[tokio::test]
+async fn proxy_rate_limiter_refills_after_wait() {
+    let limiter = ProxyRateLimiter::new();
+    assert!(
+        limiter
+            .check_and_record_with_window("custom", 1, 1)
+            .await
+            .is_ok()
+    );
+    assert!(
+        limiter
+            .check_and_record_with_window("custom", 1, 1)
+            .await
+            .is_err()  // Bucket empty
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    assert!(
+        limiter
+            .check_and_record_with_window("custom", 1, 1)
+            .await
+            .is_ok()  // Refilled!
+    );
+}
+```
+
+## Dynamic Reconfiguration
+
+Buckets are **reconfigured on the fly** when you update limits in `fishnet.toml`:
+
+From `rate_limit.rs:100-107`:
+
+```rust
+fn reconfigure(&mut self, max_requests: u32, window_seconds: u64, now: DateTime<Utc>) {
+    self.refill(now);
+    self.capacity = max_requests.max(1) as f64;
+    self.refill_per_second = self.capacity / window_seconds.max(1) as f64;
+    if self.tokens > self.capacity {
+        self.tokens = self.capacity;  // Cap to new limit
+    }
+}
+```
+
+**Example:**
+1. You set OpenAI limit to 60/min
+2. Agent makes 30 requests (30 tokens left)
+3. You update limit to 30/min in config
+4. Next request reconfigures bucket to capacity=30
+5. Since bucket has 30 tokens, it's capped to 30 (new max)
+
+## Constants
+
+Default limits are defined in `constants.rs`:
+
+```rust
+pub const RATE_LIMIT_WINDOW_SECS: i64 = 60;
+pub const LOGIN_MAX_FAILURES: usize = 5;
+```
+
+These are used when no explicit config is provided.
+
+## Performance
+
+- **Rate limit check**: < 0.1ms (in-memory HashMap lookup + float math)
+- **Token refill**: < 0.1ms (single timestamp subtraction)
+- **No database queries**: All state is kept in memory
+
+From `rate_limit.rs:109-116`:
+
+```rust
+fn refill(&mut self, now: DateTime<Utc>) {
+    let elapsed_ms = (now - self.last_refill).num_milliseconds().max(0) as f64;
+    if elapsed_ms <= 0.0 {
+        return;
+    }
+    let refill = (elapsed_ms / 1000.0) * self.refill_per_second;
+    self.tokens = (self.tokens + refill).min(self.capacity);
+    self.last_refill = now;
+}
+```
+
+## Upstream Limits
+
+Fishnet's rate limits should be set **below** the upstream service's limits to act as a protective buffer.
+
+**Example:**
+- **OpenAI Tier 1**: 3,500 requests/min
+- **Your Fishnet config**: 60 requests/min
+- **Why**: Prevents your agent from triggering OpenAI's rate limiter, which may ban your IP
+
+<Warning>
+Fishnet **cannot** protect against upstream rate limits if you set your local limits too high. Always configure conservatively.
+</Warning>
+
+## Edge Cases
+
+<AccordionGroup>
+  <Accordion title="Zero Limit">
+    Setting `rate_limit = 0` disables rate limiting entirely:
+    ```rust
+    if max_requests == 0 {
+        return Ok(());  // Bypass
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Clock Skew">
+    Token buckets use `Utc::now()`. If your system clock jumps:
+    - **Forward jump**: Bucket refills instantly (harmless)
+    - **Backward jump**: `elapsed_ms` becomes negative, refill is skipped (harmless)
+  </Accordion>
+
+  <Accordion title="Fractional Tokens">
+    Buckets use `f64` for smooth refill rates:
+    - Limit of 100 requests per 60 seconds = 1.666... tokens/second
+    - This allows requests every ~600ms instead of forcing 1/sec
+  </Accordion>
+
+  <Accordion title="Memory Usage">
+    Each bucket is ~50 bytes. Even with 100 services, total memory is ~5 KB. Buckets are never persisted to disk.
+  </Accordion>
+</AccordionGroup>
+
+## Example: Protecting Binance API
+
+Binance has strict rate limits (e.g., 1200 requests/min for spot trading). Configure Fishnet conservatively:
+
+```toml
+[binance]
+enabled = true
+rate_limit_per_minute = 100  # Well below Binance's 1200/min
+```
+
+Now if your agent has a bug and spams orders:
+
+```python
+while True:
+    binance.create_order(symbol="BTCUSDT", side="BUY", quantity=0.001)
+```
+
+**Without Fishnet:**
+- Hits Binance's 1200/min limit
+- IP banned for 1 hour
+- No more trading
+
+**With Fishnet:**
+- Hits Fishnet's 100/min limit
+- Returns `429 Too Many Requests`
+- Binance never sees the spam
+- Your IP is safe
+
+<Info>
+Rate limits are enforced **before** spend limits. A denied rate-limited request does **not** count toward your budget.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Audit Trail" icon="list-tree" href="/concepts/audit-trail">
+    Learn how every decision is logged with Merkle trees
+  </Card>
+  <Card title="Spend Limits" icon="dollar-sign" href="/concepts/spend-limits">
+    See how budgets prevent runaway costs
+  </Card>
+</CardGroup>

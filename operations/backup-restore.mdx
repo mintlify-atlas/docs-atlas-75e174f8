@@ -1,0 +1,377 @@
+---
+title: "Backup & Restore"
+description: "Protect your encrypted credential vault with backups"
+---
+
+## Overview
+
+Fishnet stores all API credentials in an encrypted SQLite vault. Regular backups ensure you can recover your credentials in case of:
+
+- Hardware failure
+- Accidental deletion
+- Migration to a new machine
+- Vault corruption
+
+<Warning>
+Backups contain your encrypted credentials. While they are encrypted with your master password, store backup files securely.
+</Warning>
+
+## Vault Location
+
+The vault database is stored in the Fishnet data directory:
+
+<Tabs>
+  <Tab title="macOS">
+    ```
+    ~/Library/Application Support/Fishnet/vault.db
+    ```
+  </Tab>
+  
+  <Tab title="Linux">
+    ```
+    ~/.local/share/fishnet/vault.db
+    ```
+  </Tab>
+</Tabs>
+
+The vault file is protected with mode `0600` (owner read/write only).
+
+## Creating Backups
+
+### Automatic Backup Path
+
+By default, backups are saved with a timestamp:
+
+```bash
+fishnet backup
+```
+
+Example output:
+```
+Backup written to ~/.local/share/fishnet/backups/vault-20260303-143022.db.bak
+```
+
+### Custom Backup Path
+
+Specify a custom output location:
+
+```bash
+fishnet backup --output ~/my-backups/fishnet-vault-$(date +%Y%m%d).db.bak
+```
+
+### Backup Directory Structure
+
+Default backups are organized by timestamp:
+
+```
+~/.local/share/fishnet/backups/
+├── vault-20260301-100000.db.bak
+├── vault-20260302-100000.db.bak
+└── vault-20260303-143022.db.bak
+```
+
+<Info>
+Backup files are exact copies of the encrypted vault. They do NOT contain plaintext credentials.
+</Info>
+
+## Restoring from Backup
+
+### Prerequisites
+
+<Steps>
+  <Step title="Stop Fishnet">
+    ```bash
+    fishnet stop
+    ```
+    
+    The restore command checks if Fishnet is running and refuses to proceed if detected.
+  </Step>
+  
+  <Step title="Locate your backup file">
+    ```bash
+    ls -lh ~/.local/share/fishnet/backups/
+    ```
+  </Step>
+</Steps>
+
+### Restore Command
+
+```bash
+fishnet restore /path/to/vault-backup.db.bak
+```
+
+You'll be prompted for confirmation:
+
+```
+Restore vault from '/path/to/vault-backup.db.bak' and overwrite current vault? [y/N]
+```
+
+### Skip Confirmation
+
+For scripted restores:
+
+```bash
+fishnet restore /path/to/vault-backup.db.bak --yes
+```
+
+<Warning>
+Restoring a backup will **completely replace** your current vault. Any credentials added since the backup was created will be lost.
+</Warning>
+
+## Backup Strategies
+
+### Manual Backups
+
+Create a backup before risky operations:
+
+```bash
+# Before bulk credential changes
+fishnet backup --output ~/safe-vault-backup.db.bak
+
+# Make changes
+fishnet add-key --service openai --name prod-key --key sk-...
+fishnet remove-key old-key
+
+# If something goes wrong:
+fishnet stop
+fishnet restore ~/safe-vault-backup.db.bak --yes
+fishnet start
+```
+
+### Automated Backups
+
+Use cron (Linux) or launchd (macOS) to schedule regular backups:
+
+<Tabs>
+  <Tab title="Linux (cron)">
+    Edit your crontab:
+    ```bash
+    crontab -e
+    ```
+    
+    Add a daily backup at 2 AM:
+    ```cron
+    0 2 * * * /usr/local/bin/fishnet backup --output ~/fishnet-backups/vault-$(date +\%Y\%m\%d).db.bak
+    ```
+  </Tab>
+  
+  <Tab title="macOS (launchd)">
+    Create `~/Library/LaunchAgents/local.fishnet.backup.plist`:
+    
+    ```xml
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+      <key>Label</key>
+      <string>local.fishnet.backup</string>
+      <key>ProgramArguments</key>
+      <array>
+        <string>/usr/local/bin/fishnet</string>
+        <string>backup</string>
+      </array>
+      <key>StartCalendarInterval</key>
+      <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+      </dict>
+    </dict>
+    </plist>
+    ```
+    
+    Load the agent:
+    ```bash
+    launchctl load ~/Library/LaunchAgents/local.fishnet.backup.plist
+    ```
+  </Tab>
+</Tabs>
+
+### Remote Backups
+
+Sync backups to cloud storage or remote servers:
+
+<CodeGroup>
+```bash Restic
+# Backup to restic repository
+fishnet backup --output /tmp/fishnet-vault.db.bak
+restic -r /srv/restic-repo backup /tmp/fishnet-vault.db.bak
+rm /tmp/fishnet-vault.db.bak
+```
+
+```bash Rclone
+# Sync to cloud storage
+fishnet backup
+rclone sync ~/.local/share/fishnet/backups/ remote:fishnet-backups/
+```
+
+```bash SCP
+# Copy to remote server
+fishnet backup --output /tmp/vault.db.bak
+scp /tmp/vault.db.bak user@backup-server:/backups/fishnet/
+rm /tmp/vault.db.bak
+```
+</CodeGroup>
+
+## Backup Retention
+
+Manage backup storage by cleaning up old backups:
+
+```bash
+# Keep last 30 days
+find ~/.local/share/fishnet/backups/ -name "vault-*.db.bak" -mtime +30 -delete
+
+# Keep last 10 backups
+ls -t ~/.local/share/fishnet/backups/vault-*.db.bak | tail -n +11 | xargs rm -f
+```
+
+<Note>
+Fishnet does not automatically delete old backups. Implement your own retention policy based on your recovery requirements.
+</Note>
+
+## Verifying Backups
+
+Test that a backup can be restored:
+
+<Steps>
+  <Step title="Create a test environment">
+    ```bash
+    mkdir /tmp/fishnet-test
+    export XDG_DATA_HOME=/tmp/fishnet-test
+    ```
+  </Step>
+  
+  <Step title="Initialize with a test password">
+    ```bash
+    fishnet init --master-password testpass123 \
+      --first-service test --first-name test --first-key test-key \
+      --daily-budget-usd 1.0 --rate-limit-per-minute 10
+    ```
+  </Step>
+  
+  <Step title="Restore the backup">
+    ```bash
+    fishnet restore ~/path/to/backup.db.bak --yes
+    ```
+  </Step>
+  
+  <Step title="Verify credentials">
+    ```bash
+    fishnet list-keys
+    ```
+  </Step>
+  
+  <Step title="Cleanup">
+    ```bash
+    unset XDG_DATA_HOME
+    rm -rf /tmp/fishnet-test
+    ```
+  </Step>
+</Steps>
+
+## Disaster Recovery
+
+### Vault Corruption
+
+If your vault becomes corrupted:
+
+```bash
+# Check vault integrity
+sqlite3 ~/.local/share/fishnet/vault.db "PRAGMA integrity_check;"
+
+# If corrupted, restore from backup
+fishnet stop
+fishnet restore ~/.local/share/fishnet/backups/vault-LATEST.db.bak --yes
+fishnet start
+```
+
+### Migration to New Machine
+
+<Steps>
+  <Step title="On old machine: Create backup">
+    ```bash
+    fishnet backup --output ~/fishnet-migration.db.bak
+    ```
+  </Step>
+  
+  <Step title="Transfer backup file">
+    ```bash
+    scp ~/fishnet-migration.db.bak user@new-machine:~/
+    ```
+  </Step>
+  
+  <Step title="On new machine: Install Fishnet">
+    ```bash
+    # Install fishnet binary
+    # Then initialize (creates data directory structure)
+    fishnet init
+    ```
+  </Step>
+  
+  <Step title="Restore from backup">
+    ```bash
+    fishnet stop
+    fishnet restore ~/fishnet-migration.db.bak --yes
+    fishnet start
+    ```
+  </Step>
+  
+  <Step title="Verify">
+    ```bash
+    fishnet list-keys
+    fishnet status
+    ```
+  </Step>
+</Steps>
+
+### Lost Master Password
+
+<Warning>
+If you lose your master password, **encrypted vault backups cannot be recovered**. The encryption is designed to be unrecoverable without the password.
+</Warning>
+
+Preventive measures:
+
+1. Store your master password in a password manager
+2. Use the keychain integration (macOS):
+   ```bash
+   fishnet init --store-derived-key-in-keychain
+   ```
+3. Document your recovery procedure
+4. Test restoration process regularly
+
+## Backup File Security
+
+### Encryption Details
+
+Backup files are encrypted SQLite databases using:
+
+- **Algorithm**: AES-256-GCM
+- **Key derivation**: Argon2id (from master password)
+- **Per-credential encryption**: Unique nonces
+
+### Storage Recommendations
+
+✅ **Do**:
+- Store backups on encrypted filesystems
+- Use restrictive file permissions (600)
+- Keep backups offline or air-gapped
+- Test restoration quarterly
+
+❌ **Don't**:
+- Store backups in public cloud storage without additional encryption
+- Email backup files
+- Store backups on the same physical drive as the original vault
+- Share backups unencrypted
+
+## Backup Size
+
+Vault backup size depends on credential count:
+
+- **Empty vault**: ~20 KB
+- **10 credentials**: ~24 KB
+- **100 credentials**: ~40 KB
+- **1000 credentials**: ~200 KB
+
+Backups are lightweight and compress well with gzip/bzip2.

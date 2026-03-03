@@ -1,0 +1,142 @@
+---
+title: fishnet remove-key
+description: Remove a credential by name
+---
+
+## Synopsis
+
+```bash
+fishnet remove-key NAME [OPTIONS]
+```
+
+Removes a credential from the encrypted vault by name. If multiple credentials exist with the same name across different services, you must specify the service using `--service`.
+
+## Arguments
+
+<ParamField path="NAME" type="string" required>
+  The name of the credential to remove.
+</ParamField>
+
+<ParamField path="--service" type="string" optional>
+  Filter by service name when multiple credentials share the same name. Required if the credential name is ambiguous.
+</ParamField>
+
+<ParamField path="--yes" type="boolean" default="false">
+  Skip the confirmation prompt and remove immediately.
+</ParamField>
+
+## Examples
+
+### Remove with confirmation
+
+```bash
+fishnet remove-key staging
+```
+
+**Prompts:**
+```
+Remove credential 'staging' (service: openai)? [y/N]: y
+```
+
+**Output:**
+```
+Removed credential 'staging' for service 'openai'.
+```
+
+### Remove with service filter
+
+```bash
+fishnet remove-key production --service openai
+```
+
+**Output:**
+```
+Remove credential 'production' (service: openai)? [y/N]: y
+Removed credential 'production' for service 'openai'.
+```
+
+### Skip confirmation
+
+```bash
+fishnet remove-key staging --yes
+```
+
+**Output:**
+```
+Removed credential 'staging' for service 'openai'.
+```
+
+### Remove from specific service when name is ambiguous
+
+```bash
+fishnet remove-key default --service together
+```
+
+## Behavior
+
+- Unlocks the credential vault
+- Searches for credentials matching the name
+- If `--service` is specified, filters to that service only
+- Prompts for confirmation unless `--yes` is used
+- Permanently deletes the credential from the vault
+
+## Error messages
+
+**Credential not found:**
+```
+no credential named 'staging'
+```
+No credential exists with that name.
+
+**Credential not found for service:**
+```
+no credential named 'production' for service 'openai'
+```
+No credential exists with that name for the specified service.
+
+**Ambiguous name:**
+```
+multiple credentials named 'default' found across services: openai, together. re-run with --service
+```
+The name exists for multiple services. Specify `--service` to disambiguate.
+
+**User cancelled:**
+```
+Aborted.
+```
+You responded 'n' or 'no' to the confirmation prompt.
+
+**Failed to unlock vault:**
+```
+FISHNET_MASTER_PASSWORD is not set and no usable keychain vault key was found
+```
+The vault could not be unlocked.
+
+**Failed to delete:**
+```
+failed to delete credential: <error>
+```
+Database error occurred during deletion.
+
+**Not found during deletion:**
+```
+credential not found during deletion
+```
+The credential was found initially but disappeared before deletion (rare race condition).
+
+## Exit codes
+
+- **0** - Credential removed successfully or user cancelled
+- **1** - Error occurred (not found, ambiguous, vault unlock failed, etc.)
+
+## Environment variables
+
+- `FISHNET_MASTER_PASSWORD` - Master password for vault decryption
+- `FISHNET_KEYCHAIN_SERVICE` - Keychain service name (macOS, default: "fishnet")
+- `FISHNET_KEYCHAIN_ACCOUNT` - Keychain account name (macOS, default: "vault_derived_key")
+
+## Related commands
+
+- [fishnet list-keys](/cli/fishnet-list-keys) - List all credentials
+- [fishnet add-key](/cli/fishnet-add-key) - Add a new credential
+- [fishnet backup](/cli/fishnet-backup) - Backup vault before removing credentials

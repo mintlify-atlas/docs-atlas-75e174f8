@@ -1,0 +1,159 @@
+---
+title: fishnet init
+description: First-time setup wizard for Fishnet
+---
+
+## Synopsis
+
+```bash
+fishnet init [OPTIONS]
+```
+
+Interactive setup wizard that initializes Fishnet for first use. Creates the encrypted vault, stores the first API credential, configures security policies, and optionally sets up system-level permissions.
+
+## Arguments
+
+<ParamField path="--master-password" type="string" optional>
+  Master password for vault encryption. If not provided, you will be prompted interactively.
+</ParamField>
+
+<ParamField path="--store-derived-key-in-keychain" type="boolean" default="false">
+  Store the derived encryption key in the system keychain (macOS only) to avoid entering the master password on every command.
+</ParamField>
+
+<ParamField path="--first-service" type="string" optional>
+  API service name for the first credential (e.g., "openai", "anthropic"). If not provided, you will be prompted.
+</ParamField>
+
+<ParamField path="--first-name" type="string" optional>
+  Name for the first credential (e.g., "production", "dev"). If not provided, you will be prompted.
+</ParamField>
+
+<ParamField path="--first-key" type="string" optional>
+  API key value for the first credential. If not provided, you will be prompted.
+</ParamField>
+
+<ParamField path="--daily-budget-usd" type="number" optional>
+  Daily spending budget in USD. If not provided, you will be prompted (default: 10.0).
+</ParamField>
+
+<ParamField path="--rate-limit-per-minute" type="number" optional>
+  Maximum requests per minute. If not provided, you will be prompted (default: 60).
+</ParamField>
+
+<ParamField path="--apply-system" type="boolean" default="false">
+  Apply system-level user and permission setup commands. Without this flag, commands are shown in dry-run mode.
+</ParamField>
+
+## Examples
+
+### Interactive setup
+
+```bash
+fishnet init
+```
+
+**Prompts:**
+```
+Master password: ********
+Confirm master password: ********
+First API service: openai
+First credential name: production
+First API key: sk-...
+Daily LLM budget (USD) [10.0]: 50
+Rate limit per minute [60]: 100
+```
+
+**Output:**
+```
+System user + permissions setup: dry-run
+  sudo useradd -r -s /bin/false fishnet
+  sudo mkdir -p /var/lib/fishnet
+  sudo chown fishnet:fishnet /var/lib/fishnet
+  sudo chmod 700 /var/lib/fishnet
+Re-run with --apply (or --apply-system) to execute.
+Fishnet init complete.
+Stored first credential 'openai:production', config written to ~/.config/fishnet/fishnet.toml
+Run: fishnet start
+```
+
+### Non-interactive setup
+
+```bash
+fishnet init \
+  --master-password "my-secure-password" \
+  --first-service openai \
+  --first-name production \
+  --first-key sk-... \
+  --daily-budget-usd 50 \
+  --rate-limit-per-minute 100
+```
+
+### Setup with keychain integration (macOS)
+
+```bash
+fishnet init --store-derived-key-in-keychain
+```
+
+**Output:**
+```
+[fishnet] vault derived key stored in macOS Keychain
+```
+
+### Apply system setup
+
+```bash
+fishnet init --apply-system
+```
+
+**Output:**
+```
+System user + permissions setup: applying 4 command(s)
+System user + permissions setup: complete.
+```
+
+## Behavior
+
+- Creates encrypted SQLite database for credential storage
+- Validates master password (minimum 8 characters recommended: 12+)
+- Stores the first API credential in the vault
+- Creates or updates fishnet.toml configuration file
+- Sets file permissions to owner-only (mode 0600)
+- Displays system setup commands (requires --apply-system to execute)
+
+## Error messages
+
+**Password mismatch:**
+```
+master password confirmation does not match
+```
+The password and confirmation do not match. Try again.
+
+**Empty password:**
+```
+master password cannot be empty
+```
+The master password cannot be blank.
+
+**Weak password warning:**
+```
+[fishnet] warning: master password length is short; consider at least 12+ characters
+```
+Password is less than 8 characters. This is a warning, not an error.
+
+**Failed to store credential:**
+```
+failed to store first credential: <error>
+```
+Could not add the credential to the vault.
+
+## Exit codes
+
+- **0** - Initialization completed successfully
+- **1** - Error occurred (password mismatch, validation failed, etc.)
+
+## Related commands
+
+- [fishnet start](/cli/fishnet-start) - Start the server after initialization
+- [fishnet add-key](/cli/fishnet-add-key) - Add more credentials after initialization
+- [fishnet policy](/cli/fishnet-policy) - Edit the configuration file

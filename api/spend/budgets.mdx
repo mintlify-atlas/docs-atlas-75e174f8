@@ -1,0 +1,218 @@
+---
+title: "Manage Budgets"
+api: "GET /api/spend/budgets | PUT /api/spend/budgets"
+description: "Retrieve or configure spending budgets for services"
+---
+
+## Authentication
+
+Requires a valid session token in the `Authorization` header:
+
+```
+Authorization: Bearer <session_token>
+```
+
+## GET /api/spend/budgets
+
+Retrieve all configured service budgets.
+
+### Response
+
+<ResponseField name="budgets" type="array">
+  Array of budget configurations
+  
+  <Expandable title="Budget object">
+    <ResponseField name="service" type="string">
+      Service identifier (e.g., `openai`, `anthropic`, `binance`)
+    </ResponseField>
+    
+    <ResponseField name="daily_budget_usd" type="number">
+      Daily spending limit in USD
+    </ResponseField>
+    
+    <ResponseField name="monthly_budget_usd" type="number" optional>
+      Monthly spending limit in USD (null if not set)
+    </ResponseField>
+    
+    <ResponseField name="updated_at" type="integer">
+      Unix timestamp of last budget update
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## PUT /api/spend/budgets
+
+Set or update budget for a specific service. Creates a new budget if one doesn't exist for the service.
+
+### Request Body
+
+<ParamField body="service" type="string" required>
+  Service identifier to set budget for
+</ParamField>
+
+<ParamField body="daily_budget_usd" type="number" required>
+  Daily spending limit in USD
+</ParamField>
+
+<ParamField body="monthly_budget_usd" type="number" optional>
+  Monthly spending limit in USD (optional)
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  Returns `true` if the budget was successfully saved
+</ResponseField>
+
+<ResponseField name="budget" type="object">
+  The saved budget configuration
+  
+  <Expandable title="Budget object">
+    <ResponseField name="service" type="string">
+      Service identifier
+    </ResponseField>
+    
+    <ResponseField name="daily_budget_usd" type="number">
+      Daily spending limit in USD
+    </ResponseField>
+    
+    <ResponseField name="monthly_budget_usd" type="number" optional>
+      Monthly spending limit in USD (null if not set)
+    </ResponseField>
+    
+    <ResponseField name="updated_at" type="integer">
+      Unix timestamp of when the budget was saved
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error Responses
+
+- **401 Unauthorized**: Missing or invalid session token
+- **500 Internal Server Error**: Database error
+
+<RequestExample>
+
+```bash GET Budgets
+curl -X GET https://localhost:3100/api/spend/budgets \
+  -H 'Authorization: Bearer fn_sess_abc123def456'
+```
+
+```bash SET Budget
+curl -X PUT https://localhost:3100/api/spend/budgets \
+  -H 'Authorization: Bearer fn_sess_abc123def456' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "service": "openai",
+    "daily_budget_usd": 100.0,
+    "monthly_budget_usd": 2500.0
+  }'
+```
+
+```python Python
+import requests
+
+headers = {
+    "Authorization": "Bearer fn_sess_abc123def456",
+    "Content-Type": "application/json"
+}
+
+# Get all budgets
+response = requests.get(
+    "https://localhost:3100/api/spend/budgets",
+    headers=headers
+)
+print(response.json())
+
+# Set budget for a service
+budget_data = {
+    "service": "openai",
+    "daily_budget_usd": 100.0,
+    "monthly_budget_usd": 2500.0
+}
+
+response = requests.put(
+    "https://localhost:3100/api/spend/budgets",
+    headers=headers,
+    json=budget_data
+)
+print(response.json())
+```
+
+```javascript JavaScript
+const headers = {
+  'Authorization': 'Bearer fn_sess_abc123def456',
+  'Content-Type': 'application/json'
+};
+
+// Get all budgets
+let response = await fetch('https://localhost:3100/api/spend/budgets', {
+  headers: headers
+});
+
+let data = await response.json();
+console.log(data);
+
+// Set budget for a service
+response = await fetch('https://localhost:3100/api/spend/budgets', {
+  method: 'PUT',
+  headers: headers,
+  body: JSON.stringify({
+    service: 'openai',
+    daily_budget_usd: 100.0,
+    monthly_budget_usd: 2500.0
+  })
+});
+
+data = await response.json();
+console.log(data);
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json GET 200 Response
+{
+  "budgets": [
+    {
+      "service": "openai",
+      "daily_budget_usd": 100.0,
+      "monthly_budget_usd": 2500.0,
+      "updated_at": 1709500000
+    },
+    {
+      "service": "anthropic",
+      "daily_budget_usd": 50.0,
+      "monthly_budget_usd": null,
+      "updated_at": 1709499500
+    },
+    {
+      "service": "binance",
+      "daily_budget_usd": 500.0,
+      "monthly_budget_usd": 10000.0,
+      "updated_at": 1709498000
+    }
+  ]
+}
+```
+
+```json PUT 200 Response
+{
+  "success": true,
+  "budget": {
+    "service": "openai",
+    "daily_budget_usd": 100.0,
+    "monthly_budget_usd": 2500.0,
+    "updated_at": 1709500123
+  }
+}
+```
+
+```json 500 Error
+{
+  "error": "database error: unable to save budget"
+}
+```
+
+</ResponseExample>

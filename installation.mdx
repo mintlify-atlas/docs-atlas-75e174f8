@@ -1,0 +1,384 @@
+---
+title: Installation
+description: Install Fishnet via script, binary, Docker, or Homebrew
+---
+
+# Installation
+
+Fishnet is distributed as a single Rust binary with no external dependencies. Choose the installation method that works best for your environment.
+
+## Prerequisites
+
+<CodeGroup>
+
+```bash Linux/macOS
+# No dependencies required for pre-built binaries
+# For building from source:
+# - Rust 1.85+
+# - Node.js 22+ (for dashboard)
+```
+
+```bash Docker
+# Docker 20.10+
+```
+
+</CodeGroup>
+
+## Install script (recommended)
+
+The fastest way to install Fishnet on Linux or macOS:
+
+```bash
+curl -fsSL https://github.com/iamyxsh/fishnet/releases/latest/download/install.sh | sh
+```
+
+### Custom install directory
+
+By default, the binary installs to `~/.local/bin`. Override with `INSTALL_DIR`:
+
+```bash
+INSTALL_DIR=/usr/local/bin curl -fsSL https://github.com/iamyxsh/fishnet/releases/latest/download/install.sh | sh
+```
+
+### Custom data directory
+
+Runtime data defaults to:
+- **Linux**: `/var/lib/fishnet`
+- **macOS**: `/Library/Application Support/Fishnet`
+
+For local dev/CI, override with `FISHNET_DATA_DIR`:
+
+```bash
+export FISHNET_DATA_DIR=~/.fishnet
+fishnet start
+```
+
+<Note>
+The install script downloads the latest release from GitHub. It automatically detects your platform (Linux/macOS) and architecture (x86_64/arm64).
+</Note>
+
+## Download binary manually
+
+Download the latest release for your platform:
+
+<CodeGroup>
+
+```bash Linux x86_64
+wget https://github.com/iamyxsh/fishnet/releases/latest/download/fishnet-linux-amd64
+chmod +x fishnet-linux-amd64
+sudo mv fishnet-linux-amd64 /usr/local/bin/fishnet
+```
+
+```bash Linux arm64
+wget https://github.com/iamyxsh/fishnet/releases/latest/download/fishnet-linux-arm64
+chmod +x fishnet-linux-arm64
+sudo mv fishnet-linux-arm64 /usr/local/bin/fishnet
+```
+
+```bash macOS x86_64
+wget https://github.com/iamyxsh/fishnet/releases/latest/download/fishnet-darwin-amd64
+chmod +x fishnet-darwin-amd64
+sudo mv fishnet-darwin-amd64 /usr/local/bin/fishnet
+```
+
+```bash macOS arm64 (Apple Silicon)
+wget https://github.com/iamyxsh/fishnet/releases/latest/download/fishnet-darwin-arm64
+chmod +x fishnet-darwin-arm64
+sudo mv fishnet-darwin-arm64 /usr/local/bin/fishnet
+```
+
+</CodeGroup>
+
+Verify the installation:
+
+```bash
+fishnet --version
+```
+
+## Docker
+
+Pull the official multi-arch image:
+
+```bash
+docker pull d3vdhruv/fishnet:latest
+```
+
+### Run with Docker Compose
+
+Create a `docker-compose.yml`:
+
+```yaml docker-compose.yml
+services:
+  fishnet:
+    image: d3vdhruv/fishnet:latest
+    ports:
+      - "8473:8473"
+    volumes:
+      - fishnet-data:/var/lib/fishnet
+      - ./fishnet.toml:/etc/fishnet/fishnet.toml:ro
+    environment:
+      - FISHNET_DATA_DIR=/var/lib/fishnet
+    restart: unless-stopped
+
+volumes:
+  fishnet-data:
+```
+
+Start the container:
+
+```bash
+docker compose up -d
+```
+
+### Run with docker run
+
+```bash
+docker run -d \
+  --name fishnet \
+  -p 8473:8473 \
+  -v fishnet-data:/var/lib/fishnet \
+  -v $(pwd)/fishnet.toml:/etc/fishnet/fishnet.toml:ro \
+  d3vdhruv/fishnet:latest
+```
+
+<Tip>
+The Docker image includes the embedded dashboard. Access it at `http://localhost:8473`.
+</Tip>
+
+### Development with Docker
+
+Use the Makefile for local dev:
+
+<CodeGroup>
+
+```bash Build and start
+make docker-up
+# API + dashboard on http://localhost:8473
+```
+
+```bash View logs
+make docker-logs
+```
+
+```bash Stop
+make docker-down
+```
+
+```bash Clean up
+make docker-clean  # removes container, volume, and image
+```
+
+</CodeGroup>
+
+## Homebrew
+
+<Warning>
+Homebrew support is coming soon. The formula will be published to a tap on release.
+</Warning>
+
+Once available, install with:
+
+```bash
+brew tap d3vdhruv/fishnet
+brew install fishnet
+```
+
+## Build from source
+
+For the latest development version or custom builds:
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/iamyxsh/fishnet.git
+    cd fishnet
+    ```
+  </Step>
+  <Step title="Install dependencies">
+    Requires **Rust 1.85+** and **Node.js 22+**:
+    ```bash
+    # Check versions
+    rustc --version  # Should be 1.85+
+    node --version   # Should be 22+
+
+    # Install frontend dependencies
+    make install
+    ```
+  </Step>
+  <Step title="Build production binary">
+    This compiles the Rust backend and embeds the React dashboard:
+    ```bash
+    make build-prod
+    ```
+    The binary will be at `./target/release/fishnet`.
+  </Step>
+  <Step title="Install to PATH">
+    ```bash
+    sudo cp ./target/release/fishnet /usr/local/bin/fishnet
+    ```
+  </Step>
+</Steps>
+
+### Development build
+
+For local development with hot reload:
+
+<CodeGroup>
+
+```bash Full stack (API + frontend)
+make dev
+# API  → http://localhost:8473
+# App  → http://localhost:5173 (proxies /api → :8473)
+```
+
+```bash Backend only
+make dev-api
+```
+
+```bash Frontend only
+make dev-fe
+```
+
+```bash Backend with auto-reload
+make dev-watch  # requires: cargo install cargo-watch
+```
+
+</CodeGroup>
+
+<Note>
+Development builds include seed data (test credentials, test blockchain) via the `dev-seed` feature flag.
+</Note>
+
+## System service
+
+Run Fishnet as a background service that starts on boot.
+
+### Linux (systemd)
+
+Install the user service:
+
+```bash
+fishnet service install --apply
+```
+
+This creates `~/.config/systemd/user/fishnet.service`:
+
+```ini
+[Unit]
+Description=Fishnet local security proxy
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fishnet start
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+Manage the service:
+
+```bash
+systemctl --user status fishnet   # Check status
+systemctl --user stop fishnet     # Stop
+systemctl --user restart fishnet  # Restart
+```
+
+### macOS (LaunchAgent)
+
+Install the launch agent:
+
+```bash
+fishnet service install --apply
+```
+
+This creates `~/Library/LaunchAgents/dev.fishnet.local.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>dev.fishnet.local</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/fishnet</string>
+      <string>start</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+  </dict>
+</plist>
+```
+
+Manage the agent:
+
+```bash
+launchctl list | grep fishnet         # Check status
+launchctl stop dev.fishnet.local      # Stop
+launchctl start dev.fishnet.local     # Start
+```
+
+### Uninstall service
+
+```bash
+fishnet service uninstall --apply
+```
+
+<Tip>
+Omit `--apply` to see what commands will run (dry-run mode).
+</Tip>
+
+## Verify installation
+
+Check that Fishnet is installed correctly:
+
+```bash
+fishnet --version
+```
+
+You should see:
+
+```
+fishnet 0.1.0
+```
+
+Run the init wizard:
+
+```bash
+fishnet init
+```
+
+Start the server:
+
+```bash
+fishnet start
+```
+
+Run diagnostics:
+
+```bash
+fishnet doctor
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Initialize Fishnet and run your first protected request
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Configure policies, spend caps, and service integrations
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/cli">
+    Full list of available commands and options
+  </Card>
+  <Card title="Dashboard" icon="chart-line" href="/dashboard">
+    Access the web UI for real-time monitoring
+  </Card>
+</CardGroup>

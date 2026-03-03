@@ -1,0 +1,114 @@
+---
+title: "Dismiss Alert"
+api: "POST /api/alerts/dismiss"
+description: "Mark a specific alert as dismissed"
+---
+
+## Authentication
+
+Requires a valid session token in the `Authorization` header:
+
+```
+Authorization: Bearer <session_token>
+```
+
+## Request Body
+
+<ParamField body="id" type="string" required>
+  Alert identifier to dismiss (format: `alert_<number>`)
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean">
+  Returns `true` if the alert was successfully dismissed
+</ResponseField>
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+- **400 Bad Request**: Missing alert ID in request body
+- **401 Unauthorized**: Missing or invalid session token
+- **404 Not Found**: Alert with specified ID not found
+- **500 Internal Server Error**: Database error
+
+<RequestExample>
+
+```bash cURL
+curl -X POST https://localhost:3100/api/alerts/dismiss \
+  -H 'Authorization: Bearer fn_sess_abc123def456' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "alert_42"
+  }'
+```
+
+```python Python
+import requests
+
+headers = {
+    "Authorization": "Bearer fn_sess_abc123def456",
+    "Content-Type": "application/json"
+}
+
+data = {
+    "id": "alert_42"
+}
+
+response = requests.post(
+    "https://localhost:3100/api/alerts/dismiss",
+    headers=headers,
+    json=data
+)
+
+print(response.json())
+```
+
+```javascript JavaScript
+const response = await fetch('https://localhost:3100/api/alerts/dismiss', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer fn_sess_abc123def456',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    id: 'alert_42'
+  })
+});
+
+const data = await response.json();
+console.log(data);
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200 Success
+{
+  "success": true
+}
+```
+
+```json 400 Bad Request
+{
+  "error": "missing alert id"
+}
+```
+
+```json 404 Not Found
+{
+  "error": "alert not found"
+}
+```
+
+```json 500 Error
+{
+  "error": "database error: connection timeout"
+}
+```
+
+</ResponseExample>

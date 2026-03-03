@@ -1,0 +1,370 @@
+---
+title: "Alerts & Webhooks"
+description: "Configure security alerts and webhook notifications"
+---
+
+## Alert Types
+
+Fishnet monitors for 10 different security events:
+
+### Prompt Drift
+
+**Type**: `prompt_drift`  
+**Severity**: Warning/Critical
+
+Detects when prompts deviate significantly from established baselines using cosine similarity.
+
+```toml fishnet.toml
+[llm.prompt_drift]
+enabled = true
+threshold = 0.85
+baseline_window = 100
+```
+
+### Prompt Size
+
+**Type**: `prompt_size`  
+**Severity**: Warning
+
+Triggers when prompt length exceeds configured limits.
+
+```toml
+[llm]
+max_prompt_tokens = 8000
+```
+
+### Budget Warning
+
+**Type**: `budget_warning`  
+**Severity**: Warning
+
+Alerts when spending reaches 80% of daily budget.
+
+### Budget Exceeded
+
+**Type**: `budget_exceeded`  
+**Severity**: Critical
+
+Triggered when daily spending limit is reached. New requests are blocked until the next day.
+
+```toml
+[llm]
+daily_budget_usd = 10.0
+```
+
+### On-chain Denied
+
+**Type**: `onchain_denied`  
+**Severity**: Critical
+
+Fires when a blockchain transaction is blocked by policy rules:
+
+- Destination address not whitelisted
+- Gas price exceeds maximum
+- Daily transaction limit reached
+- Value transfer too high
+
+### Rate Limit Hit
+
+**Type**: `rate_limit_hit`  
+**Severity**: Warning
+
+Indicates the per-minute request limit was reached.
+
+```toml
+[llm]
+rate_limit_per_minute = 100
+```
+
+### Anomalous Volume
+
+**Type**: `anomalous_volume`  
+**Severity**: Warning
+
+Detects unusual spikes in request volume compared to historical patterns.
+
+### New Endpoint
+
+**Type**: `new_endpoint`  
+**Severity**: Warning
+
+Alerts when an agent accesses a previously unseen API endpoint.
+
+### Time Anomaly
+
+**Type**: `time_anomaly`  
+**Severity**: Warning
+
+Triggers for requests outside normal operating hours (configurable).
+
+### High Severity Denied Action
+
+**Type**: `high_severity_denied_action`  
+**Severity**: Critical
+
+Fires when a high-risk action is blocked by policy (e.g., database deletion, credential exposure).
+
+## Alert Severity Levels
+
+Alerts are classified into two severity levels:
+
+<CardGroup cols={2}>
+  <Card title="Critical" icon="circle-exclamation" color="#ef4444">
+    Immediate threats requiring urgent attention:
+    - Budget exceeded
+    - On-chain transaction denials
+    - High-severity denied actions
+  </Card>
+  
+  <Card title="Warning" icon="triangle-exclamation" color="#f59e0b">
+    Potential issues to monitor:
+    - Prompt drift
+    - Budget warnings
+    - Rate limits
+    - Anomalous patterns
+  </Card>
+</CardGroup>
+
+## Configuring Alerts
+
+Enable or disable alert types in `fishnet.toml`:
+
+```toml fishnet.toml
+[alerts]
+prompt_drift = true
+prompt_size = true
+budget_warning = true
+budget_exceeded = true
+onchain_denied = true
+rate_limit_hit = true
+anomalous_volume = true
+new_endpoint = false
+time_anomaly = false
+high_severity_denied_action = true
+retention_days = 30
+```
+
+<Note>
+Alert configuration can also be updated through the dashboard at `/settings`.
+</Note>
+
+## Alert Retention
+
+Alerts are automatically cleaned up based on the retention policy:
+
+- **Default retention**: 30 days
+- **Cleanup interval**: Every 7 days
+- **Startup cleanup**: Runs on server start
+
+To adjust retention:
+
+```toml
+[alerts]
+retention_days = 90
+```
+
+## Webhook Notifications
+
+Fishnet can send alerts to external services via webhooks.
+
+### Supported Providers
+
+<Tabs>
+  <Tab title="Discord">
+    <Steps>
+      <Step title="Create a webhook URL">
+        1. Go to Server Settings → Integrations → Webhooks
+        2. Click "New Webhook"
+        3. Choose a channel and copy the webhook URL
+      </Step>
+      
+      <Step title="Configure in Fishnet">
+        Via CLI:
+        ```bash
+        # Store the webhook URL in the vault
+        fishnet add-key --service alerts.webhooks --name discord_url --key "https://discord.com/api/webhooks/..."
+        ```
+        
+        Via Dashboard:
+        - Navigate to `/alerts`
+        - Scroll to "Webhook Configuration"
+        - Paste your Discord webhook URL
+        - Click "Save"
+      </Step>
+      
+      <Step title="Test the webhook">
+        ```bash
+        curl -X POST http://localhost:8473/api/webhooks/test \
+          -H "Content-Type: application/json" \
+          -d '{"provider": "discord", "message": "Test alert"}'
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  
+  <Tab title="Slack">
+    <Steps>
+      <Step title="Create an incoming webhook">
+        1. Go to https://api.slack.com/apps
+        2. Create a new app or select existing
+        3. Enable "Incoming Webhooks"
+        4. Add webhook to workspace and copy URL
+      </Step>
+      
+      <Step title="Configure in Fishnet">
+        Via CLI:
+        ```bash
+        fishnet add-key --service alerts.webhooks --name slack_url --key "https://hooks.slack.com/services/..."
+        ```
+        
+        Via Dashboard:
+        - Navigate to `/alerts`
+        - Scroll to "Webhook Configuration"
+        - Paste your Slack webhook URL
+        - Click "Save"
+      </Step>
+      
+      <Step title="Test the webhook">
+        ```bash
+        curl -X POST http://localhost:8473/api/webhooks/test \
+          -H "Content-Type: application/json" \
+          -d '{"provider": "slack", "message": "Test alert"}'
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+### Webhook Payload Format
+
+Fishnet sends alert notifications with the following structure:
+
+<CodeGroup>
+```json Discord
+{
+  "content": "Fishnet alert [critical] type=budget_exceeded service=openai time=2026-03-03T10:30:00Z message=Daily budget of $10.00 exceeded"
+}
+```
+
+```json Slack
+{
+  "text": "Fishnet alert [warning] type=prompt_drift service=anthropic time=2026-03-03T10:30:00Z message=Prompt similarity dropped to 0.72 (threshold: 0.85)"
+}
+```
+</CodeGroup>
+
+### Webhook Retry Logic
+
+Fishnet implements exponential backoff for failed webhook deliveries:
+
+- **Max attempts**: 3
+- **Timeout**: 8 seconds per request
+- **Backoff**: 250ms → 500ms → 1000ms
+- **Retry conditions**: 429 (rate limit), 5xx (server errors)
+
+<Warning>
+Webhook URLs must use HTTPS in production. Set `FISHNET_DEV=1` to allow HTTP URLs during testing.
+</Warning>
+
+### Webhook Security
+
+Fishnet validates webhook URLs to prevent SSRF attacks:
+
+- ✅ Public HTTPS endpoints only (in production)
+- ❌ Localhost/loopback addresses blocked
+- ❌ Private IP ranges (10.x, 192.168.x, 172.16-31.x) blocked
+- ❌ Link-local addresses (169.254.x.x) blocked
+- ❌ Cloud metadata endpoints blocked
+
+### Alert Dispatch Behavior
+
+Not all alerts trigger webhooks. The following types are sent:
+
+| Alert Type | Webhook Sent |
+|------------|-------------|
+| `prompt_drift` | ✅ |
+| `prompt_size` | ✅ |
+| `budget_warning` | ✅ |
+| `budget_exceeded` | ✅ |
+| `onchain_denied` | ✅ (rate-limited to 1/hour) |
+| `rate_limit_hit` | ✅ |
+| `anomalous_volume` | ✅ |
+| `new_endpoint` | ✅ |
+| `time_anomaly` | ✅ |
+| `high_severity_denied_action` | ✅ |
+
+<Info>
+`onchain_denied` alerts are rate-limited to prevent webhook spam from repeated transaction attempts.
+</Info>
+
+## API Endpoints
+
+### List Alerts
+
+```bash
+GET /api/alerts?type=budget_warning&dismissed=false&limit=20&skip=0
+```
+
+**Response**:
+```json
+{
+  "alerts": [
+    {
+      "id": "alert_123",
+      "type": "budget_warning",
+      "severity": "warning",
+      "service": "openai",
+      "message": "80% of daily budget consumed",
+      "timestamp": 1709467800,
+      "dismissed": false
+    }
+  ]
+}
+```
+
+### Dismiss Alert
+
+```bash
+POST /api/alerts/dismiss
+Content-Type: application/json
+
+{
+  "id": "alert_123"
+}
+```
+
+### Get Alert Configuration
+
+```bash
+GET /api/alerts/config
+```
+
+**Response**:
+```json
+{
+  "toggles": {
+    "prompt_drift": true,
+    "budget_warning": true,
+    "budget_exceeded": true,
+    "onchain_denied": true,
+    "rate_limit_hit": true,
+    "anomalous_volume": true,
+    "new_endpoint": false,
+    "time_anomaly": false,
+    "high_severity_denied_action": true
+  },
+  "retention_days": 30
+}
+```
+
+### Update Alert Configuration
+
+```bash
+POST /api/alerts/config
+Content-Type: application/json
+
+{
+  "prompt_drift": false,
+  "retention_days": 60
+}
+```

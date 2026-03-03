@@ -1,0 +1,264 @@
+---
+title: "Webhook Configuration"
+api: "GET /api/alerts/webhook-config | POST /api/alerts/webhook-config | POST /api/alerts/webhook-test"
+description: "Manage webhook integrations for alert notifications"
+---
+
+## Authentication
+
+All webhook endpoints require a valid session token:
+
+```
+Authorization: Bearer <session_token>
+```
+
+## GET /api/alerts/webhook-config
+
+Retrieve the current webhook configuration status.
+
+### Response
+
+<ResponseField name="discord_configured" type="boolean">
+  Whether Discord webhook URL is configured
+</ResponseField>
+
+<ResponseField name="slack_configured" type="boolean">
+  Whether Slack webhook URL is configured
+</ResponseField>
+
+## POST /api/alerts/webhook-config
+
+Update webhook configuration. URLs are stored securely in the credential vault.
+
+### Request Body
+
+<ParamField body="discord_url" type="string" optional>
+  Discord webhook URL (must be HTTPS). Set to `null` or empty string to remove.
+</ParamField>
+
+<ParamField body="slack_url" type="string" optional>
+  Slack webhook URL (must be HTTPS). Set to `null` or empty string to remove.
+</ParamField>
+
+<Info>
+  At least one of `discord_url` or `slack_url` must be provided in the request.
+</Info>
+
+<Warning>
+  Webhook URLs must use HTTPS and cannot point to localhost, private IPs, or internal hosts (unless `FISHNET_DEV=1` is set).
+</Warning>
+
+### Response
+
+<ResponseField name="saved" type="boolean">
+  Returns `true` if configuration was saved successfully
+</ResponseField>
+
+<ResponseField name="discord_configured" type="boolean">
+  Updated Discord configuration status
+</ResponseField>
+
+<ResponseField name="slack_configured" type="boolean">
+  Updated Slack configuration status
+</ResponseField>
+
+## POST /api/alerts/webhook-test
+
+Test webhook delivery by sending a test message.
+
+### Request Body
+
+<ParamField body="provider" type="string" optional>
+  Specific provider to test: `discord` or `slack`. If omitted, tests all configured webhooks.
+</ParamField>
+
+<ParamField body="message" type="string" optional>
+  Custom test message. Defaults to a timestamp-based test message.
+</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean">
+  Overall test result: `true` if at least one configured webhook was sent successfully
+</ResponseField>
+
+<ResponseField name="configured_any" type="boolean">
+  Whether any webhooks are configured
+</ResponseField>
+
+<ResponseField name="results" type="array">
+  Array of test results per provider
+  
+  <Expandable title="Result object">
+    <ResponseField name="provider" type="string">
+      Provider name: `discord` or `slack`
+    </ResponseField>
+    
+    <ResponseField name="configured" type="boolean">
+      Whether this provider is configured
+    </ResponseField>
+    
+    <ResponseField name="sent" type="boolean">
+      Whether the test message was successfully sent
+    </ResponseField>
+    
+    <ResponseField name="detail" type="string">
+      Status message or error details
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error Responses
+
+- **400 Bad Request**: Invalid URL, missing required fields, or invalid provider name
+- **401 Unauthorized**: Missing or invalid session token
+- **500 Internal Server Error**: Failed to save webhook configuration or vault error
+
+<RequestExample>
+
+```bash Get Configuration
+curl -X GET https://localhost:3100/api/alerts/webhook-config \
+  -H 'Authorization: Bearer fn_sess_abc123def456'
+```
+
+```bash Set Webhook URL
+curl -X POST https://localhost:3100/api/alerts/webhook-config \
+  -H 'Authorization: Bearer fn_sess_abc123def456' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "discord_url": "https://discord.com/api/webhooks/123/abc",
+    "slack_url": "https://hooks.slack.com/services/T00/B00/xxx"
+  }'
+```
+
+```bash Test Webhook
+curl -X POST https://localhost:3100/api/alerts/webhook-test \
+  -H 'Authorization: Bearer fn_sess_abc123def456' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "provider": "discord",
+    "message": "Testing Fishnet alerts integration"
+  }'
+```
+
+```python Python
+import requests
+
+headers = {
+    "Authorization": "Bearer fn_sess_abc123def456",
+    "Content-Type": "application/json"
+}
+
+# Configure webhooks
+data = {
+    "discord_url": "https://discord.com/api/webhooks/123/abc",
+    "slack_url": "https://hooks.slack.com/services/T00/B00/xxx"
+}
+
+response = requests.post(
+    "https://localhost:3100/api/alerts/webhook-config",
+    headers=headers,
+    json=data
+)
+print(response.json())
+
+# Test webhook
+test_data = {
+    "provider": "discord",
+    "message": "Testing Fishnet alerts integration"
+}
+
+response = requests.post(
+    "https://localhost:3100/api/alerts/webhook-test",
+    headers=headers,
+    json=test_data
+)
+print(response.json())
+```
+
+```javascript JavaScript
+const headers = {
+  'Authorization': 'Bearer fn_sess_abc123def456',
+  'Content-Type': 'application/json'
+};
+
+// Configure webhooks
+let response = await fetch('https://localhost:3100/api/alerts/webhook-config', {
+  method: 'POST',
+  headers: headers,
+  body: JSON.stringify({
+    discord_url: 'https://discord.com/api/webhooks/123/abc',
+    slack_url: 'https://hooks.slack.com/services/T00/B00/xxx'
+  })
+});
+
+let data = await response.json();
+console.log(data);
+
+// Test webhook
+response = await fetch('https://localhost:3100/api/alerts/webhook-test', {
+  method: 'POST',
+  headers: headers,
+  body: JSON.stringify({
+    provider: 'discord',
+    message: 'Testing Fishnet alerts integration'
+  })
+});
+
+data = await response.json();
+console.log(data);
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json GET 200 Response
+{
+  "discord_configured": true,
+  "slack_configured": false
+}
+```
+
+```json POST Config 200 Response
+{
+  "saved": true,
+  "discord_configured": true,
+  "slack_configured": true
+}
+```
+
+```json Test 200 Response
+{
+  "ok": true,
+  "configured_any": true,
+  "results": [
+    {
+      "provider": "discord",
+      "configured": true,
+      "sent": true,
+      "detail": "sent"
+    },
+    {
+      "provider": "slack",
+      "configured": false,
+      "sent": false,
+      "detail": "not configured"
+    }
+  ]
+}
+```
+
+```json 400 Error
+{
+  "error": "discord_url: URL scheme must be https"
+}
+```
+
+```json 500 Error
+{
+  "error": "failed to store discord webhook URL in vault: connection timeout"
+}
+```
+
+</ResponseExample>

@@ -1,0 +1,400 @@
+---
+title: LLM Providers
+description: Configure OpenAI and Anthropic proxies with spend tracking and model pricing
+---
+
+Fishnet provides secure proxying for OpenAI and Anthropic APIs with automatic cost tracking, rate limiting, and prompt guardrails.
+
+## Supported Providers
+
+Fishnet proxies requests to:
+- **OpenAI** (`/proxy/openai/*`) - ChatGPT, GPT-4, and other OpenAI models
+- **Anthropic** (`/proxy/anthropic/*`) - Claude models
+
+Each provider has its credentials stored securely in Fishnet's encrypted vault.
+
+## API Base URLs
+
+By default, Fishnet proxies to the official APIs:
+
+- OpenAI: `https://api.openai.com`
+- Anthropic: `https://api.anthropic.com`
+
+You can override these with environment variables:
+
+```bash
+export FISHNET_OPENAI_API_BASE="https://api.openai.com"
+export FISHNET_ANTHROPIC_API_BASE="https://api.anthropic.com"
+```
+
+This is useful for:
+- Custom OpenAI-compatible endpoints
+- Self-hosted models with OpenAI API compatibility
+- Testing with mock servers
+
+## Credential Setup
+
+Store your API keys in Fishnet's encrypted vault:
+
+<Steps>
+  <Step title="Add OpenAI Credential">
+    ```bash
+    fishnet vault set openai
+    # Enter your OpenAI API key when prompted
+    ```
+
+    The key is stored with the service name `openai` and automatically attached to requests as:
+    ```
+    Authorization: Bearer sk-...
+    ```
+  </Step>
+
+  <Step title="Add Anthropic Credential">
+    ```bash
+    fishnet vault set anthropic
+    # Enter your Anthropic API key when prompted
+    ```
+
+    The key is stored with the service name `anthropic` and attached as:
+    ```
+    x-api-key: sk-ant-...
+    ```
+  </Step>
+</Steps>
+
+Credentials are encrypted at rest using AES-256-GCM with a vault master key derived from your password.
+
+## Making Proxied Requests
+
+### OpenAI
+
+Replace `https://api.openai.com` with `http://localhost:8473/proxy/openai`:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8473/proxy/openai/v1",
+    api_key="dummy"  # Fishnet provides the real key from vault
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"}
+    ]
+)
+```
+
+### Anthropic
+
+Replace `https://api.anthropic.com` with `http://localhost:8473/proxy/anthropic`:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost:8473/proxy/anthropic",
+    api_key="dummy"  # Fishnet provides the real key from vault
+)
+
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "What is the capital of France?"}
+    ]
+)
+```
+
+## Spend Tracking
+
+Fishnet automatically tracks token usage and costs for every LLM request.
+
+### Enabling Spend Tracking
+
+```toml
+[llm]
+track_spend = true
+daily_budget_usd = 20.0  # Daily limit across all providers
+budget_warning_pct = 80   # Alert at 80% of budget
+```
+
+<ParamField path="llm.track_spend" type="boolean" default="true">
+  Parse response bodies to extract token usage and calculate costs based on `model_pricing`
+</ParamField>
+
+<ParamField path="llm.daily_budget_usd" type="float" default="20.0">
+  Combined daily budget for OpenAI + Anthropic in USD. Spend is tracked per-day in UTC.
+</ParamField>
+
+<ParamField path="llm.budget_warning_pct" type="integer" default="80">
+  Alert when daily spend reaches this percentage of the budget (0-100)
+</ParamField>
+
+### How Costs Are Calculated
+
+1. **Parse Usage**: Fishnet extracts token counts from response bodies:
+   - OpenAI: `usage.prompt_tokens` and `usage.completion_tokens`
+   - Anthropic: `usage.input_tokens` and `usage.output_tokens`
+
+2. **Lookup Pricing**: Match the model name to `llm.model_pricing` configuration
+
+3. **Calculate Cost**:
+   ```
+   cost_usd = (input_tokens * input_per_million_usd / 1_000_000) +
+              (output_tokens * output_per_million_usd / 1_000_000)
+   ```
+
+4. **Record**: Store in SQLite database with service name, date, and cost in micro-USD
+
+### Streaming Responses
+
+For streaming requests (`stream: true`), Fishnet:
+- Automatically adds `stream_options: {include_usage: true}` for OpenAI chat completions
+- Parses `usage` events in the Server-Sent Events stream
+- Tracks costs when usage data appears in the stream
+
+**Note**: Interrupted streams may not include usage data, resulting in untracked costs.
+
+## Model Pricing
+
+Define per-token costs for accurate spend tracking.
+
+### Default Pricing
+
+Fishnet includes built-in pricing for common models:
+
+| Model | Input (per 1M tokens) | Output (per 1M tokens) |
+|-------|----------------------|------------------------|
+| gpt-4o | $2.50 | $10.00 |
+| gpt-4o-mini | $0.15 | $0.60 |
+| claude-sonnet | $3.00 | $15.00 |
+
+### Custom Pricing
+
+Add or override model pricing in `fishnet.toml`:
+
+```toml
+[llm.model_pricing.gpt-4o]
+input_per_million_usd = 2.50
+output_per_million_usd = 10.0
+
+[llm.model_pricing."gpt-4o-mini"]
+input_per_million_usd = 0.15
+output_per_million_usd = 0.60
+
+[llm.model_pricing."claude-sonnet"]
+input_per_million_usd = 3.0
+output_per_million_usd = 15.0
+
+[llm.model_pricing."claude-opus"]
+input_per_million_usd = 15.0
+output_per_million_usd = 75.0
+```
+
+<ParamField path="llm.model_pricing.<model>" type="object">
+  Pricing for a specific model. Model names are trimmed and normalized.
+</ParamField>
+
+<ParamField path="llm.model_pricing.<model>.input_per_million_usd" type="float" required>
+  Cost per million input tokens in USD. Must be non-negative and finite.
+</ParamField>
+
+<ParamField path="llm.model_pricing.<model>.output_per_million_usd" type="float" required>
+  Cost per million output tokens in USD. Must be non-negative and finite.
+</ParamField>
+
+### Model Name Matching
+
+Fishnet uses fuzzy matching to handle model versioning:
+
+1. **Exact match**: `gpt-4o` matches `gpt-4o`
+2. **Case-insensitive**: `GPT-4O` matches `gpt-4o`
+3. **Prefix match**: `gpt-4o-2024-05-13` matches pricing for `gpt-4o`
+4. **Longest match wins**: If both `gpt-4o` and `gpt-4o-mini` are configured, `gpt-4o-mini-2024-07-18` uses the `gpt-4o-mini` pricing
+
+This allows you to define pricing for model families without listing every version.
+
+## Rate Limiting
+
+Prevent runaway agent loops from exhausting API quotas.
+
+```toml
+[llm]
+rate_limit_per_minute = 60  # Max 60 requests/minute per provider
+```
+
+<ParamField path="llm.rate_limit_per_minute" type="integer" default="60">
+  Maximum requests per minute per provider (OpenAI and Anthropic have separate limits).
+  Set to 0 to disable rate limiting.
+</ParamField>
+
+When the rate limit is exceeded:
+- Request is denied with HTTP 429 Too Many Requests
+- Response includes `retry_after_seconds` field
+- Alert is created if `alerts.rate_limit_hit = true`
+
+## Model Restrictions
+
+Restrict which models can be used (e.g., prevent expensive GPT-4 usage in development).
+
+```toml
+[llm]
+allowed_models = ["gpt-4o-mini", "claude-sonnet"]
+```
+
+<ParamField path="llm.allowed_models" type="array[string]" default="[]">
+  Whitelist of allowed model names. Empty array allows all models.
+  Model names are matched case-insensitively.
+</ParamField>
+
+When a request uses a non-allowed model:
+- Request is denied with HTTP 403 Forbidden
+- Error message: `model not in allowlist: <model_name>`
+
+## Budget Alerts
+
+Fishnet automatically creates alerts when spend thresholds are reached.
+
+<CodeGroup>
+```toml Configuration
+[llm]
+track_spend = true
+daily_budget_usd = 20.0
+budget_warning_pct = 80
+
+[alerts]
+budget_warning = true
+budget_exceeded = true
+```
+
+```json Warning Alert (80%)
+{
+  "id": "alrt_...",
+  "alert_type": "budget_warning",
+  "severity": "warning",
+  "service": "llm",
+  "message": "LLM daily budget warning: spent $16.0000 reached 80% of limit $20.0000",
+  "timestamp": 1735689600
+}
+```
+
+```json Exceeded Alert (100%)
+{
+  "id": "alrt_...",
+  "alert_type": "budget_exceeded",
+  "severity": "critical",
+  "service": "llm",
+  "message": "LLM daily budget exceeded: spent $20.5000 (limit $20.0000)",
+  "timestamp": 1735692000
+}
+```
+</CodeGroup>
+
+### Alert Deduplication
+
+Fishnet only creates one budget alert per day:
+- One `budget_warning` alert per UTC day
+- One `budget_exceeded` alert per UTC day (replaces warning)
+
+Alerts are dispatched via configured webhooks.
+
+## Prompt Guardrails
+
+See the main [fishnet.toml reference](/config/fishnet-toml#prompt-drift-detection) for:
+- **Prompt Drift Detection**: Alert on unexpected system prompt changes
+- **Prompt Size Guard**: Prevent excessively large prompts
+
+## Viewing Spend Data
+
+Access spend data through:
+
+### Dashboard
+
+View daily spend by provider at `http://localhost:8473/dashboard`
+
+### API
+
+Query spend programmatically:
+
+```bash
+# Get today's spend totals
+curl -H "Authorization: Bearer $SESSION_TOKEN" \
+  http://localhost:8473/api/spend/today
+
+# Response:
+# [
+#   {"service": "openai", "cost_usd": 1.2345},
+#   {"service": "anthropic", "cost_usd": 0.5678}
+# ]
+```
+
+### Audit Log
+
+Every LLM request is logged with cost information:
+
+```bash
+curl -H "Authorization: Bearer $SESSION_TOKEN" \
+  http://localhost:8473/api/audit
+```
+
+```json
+{
+  "id": "aud_...",
+  "intent_type": "api_call",
+  "service": "openai",
+  "action": "POST /v1/chat/completions",
+  "decision": "approved",
+  "cost_usd": 0.0015,
+  "timestamp": 1735689600
+}
+```
+
+## Complete Example
+
+```toml
+[llm]
+# Spend tracking
+track_spend = true
+daily_budget_usd = 50.0
+budget_warning_pct = 80
+
+# Rate limiting
+rate_limit_per_minute = 100
+
+# Model restrictions
+allowed_models = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "claude-sonnet",
+]
+
+# Custom pricing for new models
+[llm.model_pricing."gpt-4o"]
+input_per_million_usd = 2.50
+output_per_million_usd = 10.0
+
+[llm.model_pricing."claude-sonnet-4-20250514"]
+input_per_million_usd = 3.0
+output_per_million_usd = 15.0
+
+# Prompt guardrails
+[llm.prompt_drift]
+enabled = true
+mode = "alert"
+
+[llm.prompt_size_guard]
+enabled = true
+max_prompt_tokens = 50000
+action = "deny"
+
+# Alerts
+[alerts]
+budget_warning = true
+budget_exceeded = true
+rate_limit_hit = true
+prompt_drift = true
+prompt_size = true
+```

@@ -1,0 +1,96 @@
+---
+title: fishnet status
+description: Show runtime status, spend, request counts, and active alerts
+---
+
+## Synopsis
+
+```bash
+fishnet status
+```
+
+Displays the current status of the Fishnet server, including uptime, today's spending by service, request counts, and active security alerts.
+
+## Arguments
+
+This command takes no arguments.
+
+## Examples
+
+### Check status when running
+
+```bash
+fishnet status
+```
+
+**Output:**
+```
+Status: running
+PID: 12345
+Uptime: 2h 34m
+Active alerts: 1 (critical: 0, warning: 1)
+Today's spend (USD):
+  openai           $0.045600
+  anthropic        $0.023400
+Today's requests:
+  openai           42
+  anthropic        18
+```
+
+### Check status when stopped
+
+```bash
+fishnet status
+```
+
+**Output:**
+```
+Status: stopped
+Uptime: n/a
+Active alerts: 0 (critical: 0, warning: 0)
+Today's spend: none
+Today's requests: none
+```
+
+## Displayed information
+
+### Status
+- **running** - Server is currently running
+- **stopped** - Server is not running
+
+### PID
+Process ID of the running Fishnet server (only shown when running).
+
+### Uptime
+How long the server has been running in hours and minutes format (e.g., "2h 34m" or "45m").
+
+### Active alerts
+Number of unresolved security alerts:
+- **critical** - High-severity alerts requiring immediate attention
+- **warning** - Lower-severity alerts for monitoring
+
+### Today's spend
+Total cost in USD for each service used today, with 6 decimal precision.
+
+### Today's requests
+Total number of API requests made to each service today.
+
+## Exit codes
+
+- **0** - Status retrieved successfully
+- **1** - Error occurred (failed to read databases, etc.)
+
+## Data sources
+
+The status command reads from:
+- PID file for process status
+- Spend database for cost tracking
+- Audit database for request counts
+- Alert database for active alerts
+
+## Related commands
+
+- [fishnet start](/cli/fishnet-start) - Start the server
+- [fishnet stop](/cli/fishnet-stop) - Stop the server
+- [fishnet audit](/cli/fishnet-audit) - View detailed audit logs
+- [fishnet doctor](/cli/fishnet-doctor) - Run diagnostic checks
